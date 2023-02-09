@@ -66,11 +66,32 @@ You may need to research the solution to this (an example solution could contain
 
 ```{r Read Data}
 
+# reading in the data
+tags <- fread('ml-25m/tags.csv') %>% select(movieId, tag)
 
+head(tags)
 
+# creating a dataframe tb with all tags for each movie pasted in a single string
+# and alss making it all lowercase
+tb <- tags %>%
+  group_by(movieId) %>%
+  summarise(tag = paste0(tag, collapse =" ") )
 
+# filtering for at least 100 words
+# by counting the number of spaces plus one, which is the number of 
+# words in the string. Then we filter to have only movies with 100 or more words
+tb <- tb %>%
+  mutate(count = str_count(tag, " ") + 1) %>%
+  filter(count > 99) %>%
+  select(-count)
 
+# removing special characters from the string
+# special characters are defined as any character that is not a
+# word character, a number or a whitespace
+tb <- tb %>%
+  mutate(tag = str_replace_all(tag, "[^[:alnum:] ]", ""))
 
+head(tb)
 
 
 
@@ -95,15 +116,21 @@ Hints: to use bigrams research:
 - NGramTokenizer() and Weka_control() functions
 
 
+---------------
+My text
+
+The preprocessing we are using consists of three parts. Firstly, we remove all special characters and make everything lowercase. This leaves us with just numbers and lowercase letters, which we can process further. Second, we will remove all stopwords. These are words such as 'the', 'as', and 'in'. These do not add any information to our data but will be used regularly for all movies. 
+
+
 ```{r Text Mining}
+library(tidytext)
 
 
-
-
-
-
-
-
+# next we're preprocessing the data to use in text mining
+prep <- tb %>%
+  mutate(tag = tolower(tag)) %>%
+  unnest_tokens(tag, tag) %>%
+  anti_join(stop_words, by= c("tag" = "word"))
 
 
 ```
