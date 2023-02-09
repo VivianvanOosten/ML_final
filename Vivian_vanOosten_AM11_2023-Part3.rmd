@@ -124,21 +124,56 @@ The preprocessing we are using consists of three parts. Firstly, we remove all s
 
 ```{r Text Mining}
 
-ds <- tb %>%
+tb <- tb %>%
   rename_at('movieId', ~'doc_id') %>%
-    rename_at('tag', ~'text') %>%
-  DataframeSource()
+    rename_at('tag', ~'text')
+ds <-  DataframeSource(tb)
 x <- Corpus(ds)
+inspect(x[[2]])
+```
 
-x <- tm_map(x, tolower)  %>%
-  tm_map(removeWords, stopwords("english"))  %>%
-  tm_map(removePunctuation) %>%
-  tm_map(stemDocument, language = "english")
+```{r}
+# making everything lower-case
+x <- tm_map(x, tolower) 
+x <- tm_map(x,removeWords, stopwords("english")) 
+x <- tm_map(x,removePunctuation)
+x <- tm_map(x,stemDocument, language = "english")
 
 ```
 
 ```{r}
+# creating the document term matrix and adding sparsity controls
+DTM <- DocumentTermMatrix(x)
+DTM <- removeSparseTerms(DTM, 0.95) 
+movieIds <- seq(1, nrow(tb), 1)
+rownames(DTM) <- movieIds
 
+# converting the DTM into a tibble for tidyverse to work with
+m    <- as.matrix(DTM) # DTM is a list, convert it to matrix
+M    <- cbind(movieIds, m) # bind column called movieId, and other columns in matrix into a single matrix M
+DTM_tbl <- as_tibble(M) # transform matrix into tibble (which is what tidyverse works with)
+DTM_tbl_tidy <- pivot_longer(DTM_tbl, cols = !movieIds, names_to = "word", values_to = "wordCount")
+```
+
+
+## Exploratory Analysis
+
+```{r}
+
+# not sure about PCA
+DTM_tbl <- scale(DTM_tbl, center = TRUE, scale = TRUE)
+pca <- prcomp(DTM_tbl, center = FALSE, scale. = FALSE) 
+summary(pca)$importance 
+
+```
+
+```{r}
+VE <- pca$sdev^2
+PVE <- VE / sum(VE) * 100
+CPVE <- cumsum(PVE)
+df <- data.frame(PC = c(1:D), 
+                 var_explained = VE,
+                 cum_sum_PVE = CPVE)
 ```
 
 
