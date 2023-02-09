@@ -57,6 +57,10 @@ We load the data and inspect it to see what our columns are. We have a column fo
 ```{r}
 ratings <- fread('ml-25m/ratings.csv')
 movies <- fread('ml-25m/movies.csv', stringsAsFactors=FALSE)
+
+#SELECTING ONLY SMALL DATASET
+movies <- movies[sample(nrow(movies), 0.01*nrow(movies)), ]
+ratings <- ratings[sample(nrow(ratings), 0.01*nrow(ratings)), ]
 ```
 
 ```{r}
@@ -244,15 +248,23 @@ dim(df_sparse)
 ```{r}
 # defining a function that removes the bottom users and movies
 selecting_fav_movies <- function(df, m, n) {
-  df[rowCounts(df) > n, # at least n movies viewed by each user
-        colCounts(df) > m] %>% # at least m users viewed each movie 
-  normalize() 
+  # number of nonzero per column
+  xx <- diff(df@p)
+  
+  # finding number of nonzero per row
+  yy <- tabulate(df@i + 1)
+  
+  df <- df[df[yy > m]]
+  df <- df[df[xx > n]]
+  
+  #df[rowCounts(df) > n][colCounts(df) > m] # at least m users viewed each movie 
+  df
 }
 ```
 
 
 
-```{r}
+```{r eval=FALSE}
 recommendation_model <- recommenderRegistry$get_entries(dataType = "realRatingMatrix")
 names(recommendation_model)
 
@@ -260,17 +272,58 @@ lapply(recommendation_model, "[[", "description")
 
 recommendation_model$IBCF_realRatingMatrix$parameters
 ```
-```{r}
-m <- 20
-n <- 50
 
-df_sparse <- selecting_fav_movies(df_sparse, m, n)
+```{r}
+m <- 1
+n <- 4
+
+#df_sparse <- selecting_fav_movies(df_sparse, m, n)
+#df_sparse <- as.matrix(df_sparse) 
 df_sparse <- as(df_sparse, "realRatingMatrix")
 normalized_ratings <- normalize(df_sparse)
+
+sampled_data<- sample(x = c(TRUE, FALSE),
+                      size = nrow(normalized_ratings),
+                      replace = TRUE,
+                      prob = c(0.8, 0.2)) 
+training_data <- normalized_ratings[sampled_data, ]
+testing_data <- normalized_ratings[!sampled_data, ]
+
+rm(ratings)
+rm(movies_at_least_m)
+rm(normalized_ratings)
+rm(df_sparse)
+
 ```
 
 ```{r}
+#recommen_model_IBCF <- Recommender(data = training_data,
+#                                   method = "IBCF",
+#                                   parameter = list(k = 350))
 
+recommen_model_UBCF <- Recommender(data = training_data, method = "UBCF", 
+                                   param=list(method="Cosine", nn=25))
+predicted_recommendations <- predict(object = recommen_model_UBCF,
+                                     newdata = testing_data,
+                                     type = "ratings",
+                                     n = 10)
+set.seed(1)
+e <- evaluationScheme(movie_ratings, method="split", train=0.8, given=-5)
+RMSE.model <- Recommender(getData(e, "train"), method = "UBCF", 
+                          param=list(method="Cosine", nn=25)) # normalise = center
+prediction <- predict(object = RMSE.model, newdata = getData(e, "known"), type="ratings")
+calcPredictionAccuracy(x = prediction, data = getData(e, "unknown"))
+```
+
+
+```{r}
+recommen_model_IBCF <- Recommender(data = training_data,
+                                   method = "IBCF",
+                                   parameter = list(k = 10))
+
+predicted_recommendations <- predict(object = recommen_model_IBCF,
+                                     newdata = testing_data,
+                                     n = top_recommendations)
 ```
 
 

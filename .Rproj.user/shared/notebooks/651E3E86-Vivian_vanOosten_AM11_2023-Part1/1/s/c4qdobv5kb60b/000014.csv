@@ -1,8 +1,0 @@
-"0","ggplot(data = ratings, mapping = aes(x=rating)) +"
-"0","  geom_bar() +"
-"0","  labs("
-"0","    title = 'Integer values are the most frequent ratings',"
-"0","    x = 'Rating',"
-"0","    y = 'Count'"
-"0","  ) + "
-"0","  theme_bw()"

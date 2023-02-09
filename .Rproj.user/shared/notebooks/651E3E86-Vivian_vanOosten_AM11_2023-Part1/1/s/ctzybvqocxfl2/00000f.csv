@@ -1,4 +1,0 @@
-"0","n <- 50"
-"0","users_at_least_n <- movies_at_least_m %>%"
-"0","  group_by(userId) %>%"
-"0","  filter(n() >= n)"
