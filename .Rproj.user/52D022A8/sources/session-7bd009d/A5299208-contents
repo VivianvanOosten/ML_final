@@ -123,17 +123,25 @@ The preprocessing we are using consists of three parts. Firstly, we remove all s
 
 
 ```{r Text Mining}
-library(tidytext)
 
+ds <- tb %>%
+  rename_at('movieId', ~'doc_id') %>%
+    rename_at('tag', ~'text') %>%
+  DataframeSource()
+x <- Corpus(ds)
 
-# next we're preprocessing the data to use in text mining
-prep <- tb %>%
-  mutate(tag = tolower(tag)) %>%
-  unnest_tokens(tag, tag) %>%
-  anti_join(stop_words, by= c("tag" = "word"))
-
+x <- tm_map(x, tolower)  %>%
+  tm_map(removeWords, stopwords("english"))  %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stemDocument, language = "english")
 
 ```
+
+```{r}
+
+```
+
+
 
 # Principle Component Analysis
 

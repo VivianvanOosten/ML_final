@@ -123,14 +123,23 @@ The preprocessing we are using consists of three parts. Firstly, we remove all s
 
 
 ```{r Text Mining}
-library(tidytext)
+library(tm)
+
+
+#ds <-
+  tb %>%
+  rename_at('movieId', ~'doc_id',
+            'tag', ~'text') %>%
+head()
+ # DataframeSource()
+#x <- Corpus(ds)
 
 
 # next we're preprocessing the data to use in text mining
-prep <- tb %>%
-  mutate(tag = tolower(tag)) %>%
-  unnest_tokens(tag, tag) %>%
-  anti_join(stop_words, by= c("tag" = "word"))
+#prep <- tb %>%
+#  mutate(tag = tolower(tag)) %>%
+#  unnest_tokens(tag, tag) %>%
+#  anti_join(stop_words, by= c("tag" = "word"))
 
 
 ```
