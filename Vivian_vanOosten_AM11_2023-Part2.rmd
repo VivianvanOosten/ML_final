@@ -16,7 +16,7 @@ library(tidyverse)
 library(tm) # package for text mining  
 library(SnowballC) # for stemming words
 library(stringr) # package to count number of words in a string
-library(RWeka) # package for ngrams
+#library(RWeka) # package for ngrams
 
 knitr::opts_chunk$set(
   tidy = FALSE,   # display code as typed
@@ -123,26 +123,49 @@ The preprocessing we are using consists of three parts. Firstly, we remove all s
 
 
 ```{r Text Mining}
-library(tm)
 
-
-#ds <-
-  tb %>%
-  rename_at('movieId', ~'doc_id',
-            'tag', ~'text') %>%
-head()
- # DataframeSource()
+tb <- tb %>%
+  rename_at('movieId', ~'doc_id') %>%
+    rename_at('tag', ~'text') %>%
+  mutate(doc_id = as.character(doc_id))
+#ds <-  DataframeSource(tb)
 #x <- Corpus(ds)
-
-
-# next we're preprocessing the data to use in text mining
-#prep <- tb %>%
-#  mutate(tag = tolower(tag)) %>%
-#  unnest_tokens(tag, tag) %>%
-#  anti_join(stop_words, by= c("tag" = "word"))
-
+x <- Corpus(VectorSource(tb$text))
 
 ```
+
+```{r}
+# making everything lower-case
+x <- tm_map(x, tolower) 
+x <- tm_map(x,removeWords, stopwords("english")) 
+x <- tm_map(x,removePunctuation)
+x <- tm_map(x,stemDocument, language = "english")
+
+```
+
+```{r}
+# creating the document term matrix and adding sparsity controls
+DTM <- DocumentTermMatrix(x)
+DTM <- removeSparseTerms(DTM, 0.95) 
+movieIds <- seq(1, nrow(tb), 1)
+rownames(DTM) <- movieIds
+
+m <- as.matrix(DTM)
+DTM_tbl <- as_tibble(m)
+DTM_tidy <- pivot_longer(DTM_tbl, cols = everything(), names_to = "word", values_to = "wordCount")
+
+```
+
+
+## Exploratory Analysis
+
+
+
+```{r}
+
+```
+
+
 
 # Principle Component Analysis
 
@@ -159,7 +182,46 @@ Report your key decisions:
 - Reasons for keeping the number of PCs you decided to keep
 As the final step ensure to extract and save the relevant number of new columns (containing the PC scores).
 
-```{r PCA}
 
+------------------------
+MY TEXT
+
+In order to further reduce the dimensionality of the data and create a dataset we could comfortable use for SVM, we run a PCA on the document term matrix. We started out with 245 columns. 
+
+```{r PCA}
+dim(DTM_tbl) # 2946 245
+
+# not sure about PCA
+DTM_tbl <- scale(DTM_tbl, center = FALSE, scale = FALSE)
+pca <- prcomp(DTM_tbl, center = FALSE, scale. = FALSE) 
+summary(pca)$importance 
+
+```
+
+
+```{r}
+VE <- pca$sdev^2
+PVE <- VE / sum(VE) * 100
+CPVE <- cumsum(PVE)
+df <- data.frame(PC = c(1:245),
+                 var_explained = VE,
+                 cum_sum_PVE = CPVE)
+
+# --- VARIANCE EXPAINED (SCREEPLOT), VE:
+M <- 245
+df[1:M,] %>% # select M PCs (rows) and all columns of the dataframe to pass into ggplot
+  ggplot(aes(x = PC, y = var_explained)) +
+  geom_point(size = 0.5) +
+  geom_line() + 
+  scale_x_continuous(limits = c(50, 245) ) + # )breaks = c(1:M)) +
+  scale_y_continuous(limits = c(0, 20)) + 
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red", size = 1.2) +
+  labs(x = "PC Number", y = "VE", 
+       title = "Scree Plot", 
+       subtitle = "PCA on movies data") +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15, face = "bold", color = "blue"),
+        plot.title = element_text(size = 18, color = "blue"),
+        plot.subtitle = element_text(size = 15, color = "blue") )
 ```
 
