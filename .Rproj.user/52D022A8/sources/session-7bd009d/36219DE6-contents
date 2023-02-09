@@ -1,0 +1,341 @@
+#### 01 - LOAD PACKAGES ####
+
+#setwd("H:/My Drive/TEACHING/London Business School/03 - MAM AM11 - Recommendation Systems/Recommendation Systems - Lecture 1/Practical 1/data/")
+list.files()
+# Find the location in your laptop where the data is saved. 
+#The link will look slightly different for Macs and Windows. 
+#Copy paste the file location from address bar, if needed
+
+rm(list=ls())
+
+# check.packages function: install and load multiple R packages.
+# Check to see if packages are installed. Install them if they are not, then load them into the R session.
+check.packages <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)
+}
+
+# Usage example
+packageList<-c("ggplot2", "data.table", "reshape2", "recommenderlab", "recosystem")
+check.packages(packageList)
+rm(packageList, check.packages)
+
+library(recommenderlab)
+library(ggplot2)                       
+library(data.table)
+library(reshape2)
+
+#### 02 - LOAD DATA ####
+movie_data <- fread("data/movies.csv",stringsAsFactors=FALSE)
+rating_data <- fread(input = "data/ratings.csv", select = c(1:3))
+
+# find_freq_users_n_movies <- function(rating_data, movie_data, n){
+#   topUsersN <- as.integer(as.character(names(which(table(rating_data$userId) > n))))
+#   topMoviesN <- as.integer(as.character(names(which(table(rating_data$movieId) > n))))
+#   
+#   movieDataFreq <- movie_data[which(movie_data$movieId %in% topMoviesN),]
+#   
+#   topUsersNLoc <- which(rating_data$userId %in% topUsersN)
+#   topMoviesNLoc <- which(rating_data$movieId %in% topMoviesN)
+#   intersectLoc <- intersect(topMoviesNLoc, topUsersNLoc)
+#   ratingDataFreq <- rating_data[intersectLoc]
+#   
+#   return(list(movieDataFreq, ratingDataFreq))
+# }
+
+# system.time({
+# movieLensFreq <- find_freq_users_n_movies(rating_data = rating_data, movie_data = movie_data, n = 1000)
+# movieData <- movieLensFreq[[1]]
+# ratingData <- movieLensFreq[[2]]
+# })
+
+ratingData <- rating_data
+movieData <- movie_data
+
+#rm(movieLensFreq,find_freq_users_n_movies)
+rm(movie_data, rating_data)
+
+View(movieData)
+View(ratingData)
+
+#rating_data <- rating_data[,-4]
+## Consider using fread from 'data.table' for large datasets. It will be much faster to manipulate large matrices with 'data.table' utilities ##
+
+#### 03 - DATA CLEANING ####
+
+length(unique(ratingData$userId))
+length(unique(ratingData$movieId))
+
+length(unique(movieData$movieId))
+length(unique(movieData$title))
+
+## Two movies seem to repeat ##
+# Men with Guns (1997) War of the Worlds (2005) 
+
+repeatMovies <- names(which(table(movieData$title) > 1))
+removeRows <- integer()
+for(i in repeatMovies){
+  repeatMovieLoc <- which(movieData$title == i)
+  tempGenre <- paste(movieData$genres[repeatMovieLoc], collapse="|")
+  tempGenre <- paste(unique(unlist(strsplit(tempGenre, split = "\\|")[[1]])), collapse = "|")
+  movieData$genres[repeatMovieLoc[1]] <- tempGenre
+  
+  ##### REMOVE REPEATS IN RATING DATA ####
+  repeatMovieIdLoc <- which(ratingData$movieId %in% movieData$movieId[repeatMovieLoc[-1]])
+  ratingData$movieId[repeatMovieIdLoc] <- movieData$movieId[repeatMovieLoc[1]]
+  removeRows <- c(removeRows, repeatMovieLoc[-1])
+}
+movieData$movieId[removeRows]
+movieData <- movieData[-removeRows,]
+movieData[movieData$title == repeatMovies[1],]
+movieData[movieData$title == repeatMovies[2],]
+rm(i, removeRows, repeatMovieIdLoc, repeatMovieLoc, repeatMovies, tempGenre)
+
+## There is a risk that the same user has rated a movie multiple times. We can take the best rating ##
+
+ratingData1 <- aggregate(x = ratingData, by = list(ratingData$userId, ratingData$movieId), FUN = max)
+# For a large dataset we should avoid this or, find a more efficient way. You can also use aggregate from data.table
+ratingData <- ratingData1[,-c(1,2)]
+rm(ratingData1)
+length(unique(ratingData$movieId))
+length(unique(movieData$movieId))
+setdiff(unique(movieData$movieId), unique(ratingData$movieId))
+# These movies were not rated by any user. We ought to remove these from movieData or, ignore for now. It shouldn't affect our recommendations. Also, this would be unlikely in large datasets
+## [1]   7243   8785  54290 128991
+
+## QUICK CHECKS OF THE DATA WE HAVE JUST LOADED n CLEANED ##
+str(movieData)
+summary(movieData)    
+head(movieData)
+summary(ratingData)   
+head(ratingData)
+
+## CAST GENRES AS DATA.FRAMES. WE WILL CREATE A CROSS MATRIX OF GENRES ##
+
+#list_genre <- c("Action", "Adventure", "Animation", "Children", 
+#                "Comedy", "Crime","Documentary", "Drama", "Fantasy",
+#                "Film-Noir", "Horror", "Musical", "Mystery","Romance",
+#                "Sci-Fi", "Thriller", "War", "Western")
+
+# genre_mat <- data.frame(matrix(0, nrow = nrow(movieData), ncol = length(list_genre)))
+# colnames(genre_mat) <- list_genre
+# 
+# for(index in 1:nrow(genre_mat)) {
+#   castRowIndex <- which(list_genre %in% unlist(strsplit(movieData$genres[index], split = "[|]")))
+#   genre_mat[index, castRowIndex] <- 1
+# }
+# genre_mat <- apply(genre_mat, 2, as.integer)
+# dim(genre_mat)
+# ##[1] 10327    18 # 10327 Movies against 18 genres
+# rm(castRowIndex, index)
+# 
+# str(genre_mat)
+# View(genre_mat)
+
+#searchMatrix <- data.frame(cbind(movieData[,1:2], genre_mat[]))
+#head(searchMatrix)    
+#rm(searchMatrix)
+## genre_mat -> [1] 10327    18
+
+ratingMatrix <- dcast(ratingData, userId ~ movieId, value.var = "rating", na.rm=TRUE)
+## UserIds as rows and MovieIds as columns
+ratingMatrix <- as.matrix(ratingMatrix[,-1]) #remove userIds
+dim(ratingMatrix)
+# This is your user-item matrix. Finally! Check number of users (rows) against initial numbers
+setdiff(movieData$movieId, as.integer(colnames(ratingMatrix)))
+## [1]  7243   8785  54290 128991
+## Quick check to see you have same set of movies still :) In this case we have a few more in movies database. 
+#It shouldn't affect our analysis so we will ignore.
+#Convert rating matrix into a recommenderlab sparse matrix
+ratingMatrix <- as(ratingMatrix, "realRatingMatrix")
+ratingMatrix
+
+recommendation_model <- recommenderRegistry$get_entries(dataType = "realRatingMatrix")
+names(recommendation_model)
+
+lapply(recommendation_model, "[[", "description")
+
+recommendation_model$IBCF_realRatingMatrix$parameters
+
+#### 04 - EXPLORATORY ANALYSIS - Heatmaps, Histograms ####
+
+user_similarity <- similarity(ratingMatrix[1:10, ],
+                              method = "cosine",
+                              which = "users")
+as.matrix(user_similarity)
+image(as.matrix(user_similarity), main = "User's Similarities")
+
+movie_similarity <- similarity(ratingMatrix[, 1:10],
+                               method = "cosine",
+                               which = "items")
+as.matrix(movie_similarity)
+image(as.matrix(movie_similarity), main = "Movies similarity")
+
+rating_values <- as.vector(ratingMatrix@data)
+sort(unique(rating_values)) # extracting unique ratings
+
+Table_of_Ratings <- table(rating_values) # creating a count of movie ratings
+Table_of_Ratings
+
+library(ggplot2)
+movie_views <- colCounts(ratingMatrix) # count views for each movie
+table_views <- data.frame(movie = as.integer(names(movie_views)),
+                          views = movie_views) # create dataframe of views
+
+table_views1 <- merge(movieData[,1:2], table_views, by.x = 'movieId', by.y = 'movie')
+table_views2 <- table_views1[order(table_views1$views, decreasing = TRUE), ] # sort by number of views
+table_views <- table_views2
+
+View(table_views)
+rm(table_views1, table_views2)
+
+# SELECT SUBSET FOR VISUALISATION #
+
+ggplot(table_views[1:10, ], aes(x = title, y = views)) +
+  geom_bar(stat="identity", fill = 'steelblue') +
+  geom_text(aes(label=views), vjust=-0.3, size=3.5) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Total Views of the Top Films")
+
+image(ratingMatrix[1:25, 1:25], axes = FALSE, main = "Heatmap of the first 25 rows and 25 columns")
+
+#### We will now build some item and user based Collaborative Filtering methods. Remember, CF works better 
+#for users/items which are reasonably common. For rarer items we need to adopt a content based approach. ##
+movie_ratings <- ratingMatrix[rowCounts(ratingMatrix) > 10,
+                              colCounts(ratingMatrix) > 10]
+# This line reduces 10323 movies to a set of 2160 - presumably the relatively popular ones. If we had more users (and thus ratings) we would be able to play with a larger set of movies and hence have richer recommendations
+# If we changed this number the performance of the final model is likely to change as well. For very small numbers the performance will go down. When sample if limited large numbers (instead of 50) will also decrease performance
+movie_ratings 
+
+## Clarify what we mean by the rowCounts and colCounts here
+
+minimum_movies <- quantile(rowCounts(movie_ratings), 0.80)
+minimum_users  <- quantile(colCounts(movie_ratings), 0.80)
+## This is our user-item matrix - only for common users and items ##
+image(movie_ratings[rowCounts(movie_ratings) > minimum_movies,
+                    colCounts(movie_ratings) > minimum_users],
+      main = "Heatmap of the top users and movies")
+
+average_ratings <- rowMeans(movie_ratings)
+qplot(average_ratings, fill=I("steelblue"), col=I("red")) +
+  ggtitle("Distribution of the average rating per user")
+
+## Do you remember what 'Normalize' means? Ask if you have forgotten or, 'Google' :) ##
+
+normalized_ratings <- normalize(movie_ratings)
+sum(rowMeans(normalized_ratings) > 0.00001)
+image(normalized_ratings[rowCounts(normalized_ratings) > minimum_movies,
+                         colCounts(normalized_ratings) > minimum_users],
+      main = "Normalized Ratings of the Top Users")
+
+binary_minimum_movies <- quantile(rowCounts(movie_ratings), 0.95)
+binary_minimum_users <- quantile(colCounts(movie_ratings), 0.95)
+#movies_watched <- binarize(movie_ratings, minRating = 1)
+good_rated_films <- binarize(movie_ratings, minRating = 3)
+image(good_rated_films[rowCounts(movie_ratings) > binary_minimum_movies,
+                       colCounts(movie_ratings) > binary_minimum_users],
+      main = "Heatmap of the top users and movies")
+
+## Here we split our sample into train and test. We intend to train our model on 80% of the data. 
+#And, test the model on the remaining 20%
+sampled_data<- sample(x = c(TRUE, FALSE),
+                      size = nrow(movie_ratings),
+                      replace = TRUE,
+                      prob = c(0.8, 0.2))
+training_data <- movie_ratings[sampled_data, ]
+testing_data <- movie_ratings[!sampled_data, ]
+
+recommendation_system <- recommenderRegistry$get_entries(dataType ="realRatingMatrix")
+recommendation_system$IBCF_realRatingMatrix$parameters
+
+## This is your Item Based Collaborative Filtering ##
+recommen_model_IBCF <- Recommender(data = training_data,
+                                   method = "IBCF",
+                                   parameter = list(k = 350))
+recommen_model_IBCF
+class(recommen_model_IBCF)
+
+model_info <- getModel(recommen_model_IBCF)
+class(model_info$sim)
+dim(model_info$sim)
+top_items <- 20
+image(model_info$sim[1:top_items, 1:top_items],
+      main = "Heatmap of the first rows and columns")
+
+sum_rows <- rowSums(model_info$sim > 0)
+table(sum_rows)
+#This is the number of items (movies) we are using. Most popular movies
+sum_cols <- colSums(model_info$sim > 0)
+qplot(sum_cols, fill=I("steelblue"), col=I("red"))
+  + ggtitle("Distribution of the column count")
+
+top_recommendations <- 10 # the number of items to recommend to each user
+predicted_recommendations <- predict(object = recommen_model_IBCF,
+                                     newdata = testing_data,
+                                     n = top_recommendations)
+predicted_recommendations
+
+user1 <- predicted_recommendations@items[[1]] # recommendations for the first user
+movies_user1 <- predicted_recommendations@itemLabels[user1]
+movieData$title[movieData$movieId %in% movies_user1]
+
+recommendation_matrix <- sapply(predicted_recommendations@items,
+                                function(x){ as.integer(colnames(movie_ratings)[x]) })
+# matrix with the recommendations for each user
+
+#### 05 - MODEL EVALUATION ####
+
+# Creation of the model - U(ser) B(ased) C(ollaborative) F(iltering)
+recommen_model_UBCF <- Recommender(data = training_data, method = "UBCF", 
+                                   param=list(normalize = "center", method="Cosine", nn=25))
+# 'nn' is nearest neighbours
+#Making predictions 
+predicted_recommendations <- predict(object = recommen_model_UBCF,
+                                     #newdata = movie_ratings[1:25, ],
+                                     newdata = testing_data,
+                                     type = "ratings",
+                                     n = top_recommendations)
+as(predicted_recommendations, "matrix")[,1:5]
+
+#Evaluation object for RMSE checking.
+set.seed(1)
+e <- evaluationScheme(movie_ratings, method="split", train=0.8, given=-5)
+
+#Estimating RMSE for UBCF - We will use the raw data for estimating RMSE
+
+RMSE.model <- Recommender(getData(e, "train"), method = "UBCF", 
+                          param=list(normalize = "center", method="Cosine", nn=25))
+prediction <- predict(object = RMSE.model, newdata = getData(e, "known"), type="ratings")
+calcPredictionAccuracy(x = prediction, data = getData(e, "unknown"))
+#rmse_ubcf
+
+#### Item-item collaborative Filtering
+#Building model
+# recommen_model_IBCF <- Recommender(data = training_data, method = "IBCF", 
+#                                   param=list(normalize = "center", method="Cosine", k=350))
+# 'k' refers to the number of nearest neighbours used for the IBCF algo
+# recommen_model_IBCF was built earlier - close to line 249
+
+prediction <- predict(recommen_model_IBCF,
+                      #movie_ratings[1:25],
+                      newdata = testing_data,
+                      type="ratings")
+View(as(prediction, "matrix"))[,1:5]
+
+#Estimating RMSE for IBCF - We will use the raw data for estimating RMSE
+
+set.seed(1)
+RMSE.model <- Recommender(getData(e, "train"), method = "IBCF", 
+                          param=list(normalize = "center", method="Cosine",k=350))
+# Refer to code with 'evaluationScheme' as well
+prediction <- predict(RMSE.model, getData(e, "known"), type="ratings")
+calcPredictionAccuracy(prediction, getData(e, "unknown"))[1]
+
+## Example
+
+movie_ratings[410,]
+recommended.items.u410 <- predict(recommen_model_IBCF, movie_ratings[410,], n=5)
+as(recommended.items.u410, "list")[[1]]
+

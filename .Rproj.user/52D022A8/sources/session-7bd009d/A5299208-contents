@@ -1,0 +1,156 @@
+---
+title: "YOUR NAME : AM11 Individual Assignment Part 2: Text Mining + PCA"
+output:
+  html_document:
+    theme: cosmo
+    highlight: haddock
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(tidyverse)
+library(tm) # package for text mining  
+library(SnowballC) # for stemming words
+library(stringr) # package to count number of words in a string
+library(RWeka) # package for ngrams
+
+knitr::opts_chunk$set(
+  tidy = FALSE,   # display code as typed
+  size = "small") # slightly smaller font for code
+```
+
+# Assignment Completion Hints (DELETE THIS SECTION BEFROE SUBMITTING):
+
+Hints for completing the assignment: 
+- Ensure to document your code very well explaining what your lines of code do
+- At every step that makes sense, print out the current results in order to be able to see your answers without running your code (i.e. the HTML knitted file should show the results of that chunk of code)
+- For EVERY new matrix you create during your work progress, print also their dimensions (nrows, ncols)
+- For final R outputs and visualisations, elaborate also in written form.
+- Before your final submission on canvas check whether your RMD file compiles without errors. Submit RMD file and and its knitted version HTML (or pdf) file. Make sure that all your outputs, results and comments are visible in the knitted version.
+
+Grading:
+The points split between the tasks below is:
+- 20% data preprocessing
+- 40% text mining
+- 40% PCA
+
+Further hints:
+- Avoid re-running joining tables several times because it may change/affect the matrix dimension. Always run your code from fresh if unsure (delete all variables and start from the top).
+
+# Data Preprocessing
+
+Continue working with the MovieLens Data focusing on the distinct movies (specified by movieId variable) and the tags that users provided for that movie (specified by tag variable).
+In this section you will work with the large dataset of 25 million movie ratings. provided by ml-25m.zip located here: https://grouplens.org/datasets/movielens/25m/ 
+Within the zipped file you will find a csv file called "tags.csv".
+It contains 1 million tag observations provided by users for 62000 movies.  
+
+The overall task of Part 2 is two fold:
+- Perform Text Mining on the tag data to obtain a Document Term Matrix
+- Perform dimensionality reduction using PCA to obtain scores/coordinates (i.e. new features) which will be used in the next Part 3 with Christos.
+
+Start by reading in the dataset "ml-25m/tags.csv" and only keep the movieId and the tag columns (the resulting dimensionality should be 1,093,360 by 2).
+
+Next, create a dataframe called tb which contains unique movies with a single tag per each movie (i.e. aggregate the tags from different users per each movie into a single string).
+The resulting tb dimensionality should be 45,251 by 2.
+
+Next, only keep those movies (observations / rows) for which the string word count is 100 or more (i.e. for which the tag contains at least 100 words providing the users feedback on that movie). 
+This is to ensure that we have enough text for each movie which will become a document in the Document Term Matrix.
+The resulting tb dimensionality should be 2918 x 2.
+
+Lastly, remove any special characters from all of the tags.
+You may need to research the solution to this (an example solution could contain gsub() function). 
+
+```{r Read Data}
+
+# reading in the data
+tags <- fread('ml-25m/tags.csv') %>% select(movieId, tag)
+
+head(tags)
+
+# creating a dataframe tb with all tags for each movie pasted in a single string
+# and alss making it all lowercase
+tb <- tags %>%
+  group_by(movieId) %>%
+  summarise(tag = paste0(tag, collapse =" ") )
+
+# filtering for at least 100 words
+# by counting the number of spaces plus one, which is the number of 
+# words in the string. Then we filter to have only movies with 100 or more words
+tb <- tb %>%
+  mutate(count = str_count(tag, " ") + 1) %>%
+  filter(count > 99) %>%
+  select(-count)
+
+# removing special characters from the string
+# special characters are defined as any character that is not a
+# word character, a number or a whitespace
+tb <- tb %>%
+  mutate(tag = str_replace_all(tag, "[^[:alnum:] ]", ""))
+
+head(tb)
+
+
+
+```
+
+# Text Mining 
+
+Your task is to build a Document Term Matrix containing individual movies as documents and terms/words occurring in tags as columns. 
+Hint: when loading data from a dataframe you can use Corpus(VectorSource())
+
+It is up to you to decide the best way to preprocess the data: e.g. make all words lower case, remove punctuation etc.
+You may decide to remove sparse terms, if you do, explain what you did and how you did it. 
+Also you should decide if you should create DTM-TF, DTM-TFIDF, bigram based DTM etc, and justify your answer.
+Ensure to explain each of your data preprocessing decisions.
+Think carefully about how your data will be used (i.e. you are using text mining and PCA to create features to be used in further analysis such as SVM).
+
+If you decide to create a DTM that also contains bigrams, you should be careful as your matrix will become sparse very quickly. 
+After addressing the sparsity, please report the number of bigrams that is present in your final DTM.
+Hints: to use bigrams research:
+- library(RWeka) 
+- VCorpus() and VectorSource() functions
+- NGramTokenizer() and Weka_control() functions
+
+
+---------------
+My text
+
+The preprocessing we are using consists of three parts. Firstly, we remove all special characters and make everything lowercase. This leaves us with just numbers and lowercase letters, which we can process further. Second, we will remove all stopwords. These are words such as 'the', 'as', and 'in'. These do not add any information to our data but will be used regularly for all movies. 
+
+
+```{r Text Mining}
+library(tidytext)
+
+
+# next we're preprocessing the data to use in text mining
+prep <- tb %>%
+  mutate(tag = tolower(tag)) %>%
+  unnest_tokens(tag, tag) %>%
+  anti_join(stop_words, by= c("tag" = "word"))
+
+
+```
+
+# Principle Component Analysis
+
+Now that you have a DTM, we can use it in an unsupervised machine learning algorithm that can reduce the dimensionality of the data. 
+Specifically we have terms/words that describe each movie, however likely we have way too many columns and should only use a reduced amount of columns in our further analysis.
+For example you may wish to run a classification algorithm such as an SVM as a final step in order to be able to create a model that can predict a movie's rating based on some features, including the features produced as a result of running the PCA. 
+
+Therefore your next task is to run the PCA on the Document Term Matrix that you designed above.
+As a result of the PCA you should provide the PC coordinates/scores to be used as features in Part 3.
+Crucially, you must decide on the number of these new columns (containing the PC scores) that should be used, i.e. report what dimensionality you started with (your final DTM number of columns) and what dimensionality you decided to reduce the data to (number of PCs you decide to keep).
+Report your key decisions:
+- PCA data preprocessing 
+- Analysis of the variance
+- Reasons for keeping the number of PCs you decided to keep
+As the final step ensure to extract and save the relevant number of new columns (containing the PC scores).
+
+```{r PCA}
+
+```
+

@@ -1,0 +1,18 @@
+"0","library(knitr)"
+"0","library(tidyverse)"
+"0","library(tm) # package for text mining  "
+"0","library(SnowballC) # for stemming words"
+"0","library(stringr) # package to count number of words in a string"
+"0","library(RWeka) # package for ngrams"
+"2","The operation couldn’t be completed. Unable to locate a Java Runtime.
+Please visit http://www.java.com for information on installing Java.
+
+"
+"2","Warning: running command '/usr/libexec/java_home' had status 1"
+"2","Warning: Cannot find JVM library 'NA/lib/server/libjvm.dylib'
+Install Java and/or check JAVA_HOME (if in doubt, do NOT set it, it will be detected)"
+"2","Error: package or namespace load failed for ‘RWeka’:
+ .onLoad failed in loadNamespace() for 'rJava', details:
+  call: fun(libname, pkgname)
+  error: JVM could not be found
+"

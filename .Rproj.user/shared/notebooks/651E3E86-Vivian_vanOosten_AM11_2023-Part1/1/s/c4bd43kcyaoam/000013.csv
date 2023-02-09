@@ -1,0 +1,5 @@
+"0","m <- 20"
+"0","movies_at_least_m <- ratings %>%"
+"0","  group_by(movieId) %>%"
+"0","  filter(n() >= m)"
+"0",""
