@@ -1,5 +1,5 @@
 ---
-title: "YOUR NAME : AM11 Individual Assignment Part 2: Text Mining + PCA"
+title: "YOUR NAME : AM11 Individual Assignment Part 1: Recommendation Systems"
 output:
   html_document:
     theme: cosmo
@@ -29,26 +29,6 @@ knitr::opts_chunk$set(
   size = "small") # slightly smaller font for code
 ```
 
-# Assignment Completion Hints (DELETE THIS SECTION BEFORE SUBMITTING):
-
-Hints for completing the assignment: - Ensure to document your code very
-well explaining what your lines of code do - At every step that makes
-sense, print out the current results in order to be able to see your
-answers without running your code (i.e. the HTML knitted file should
-show the results of that chunk of code) - For EVERY new matrix you
-create during your work progress, print also their dimensions (nrows,
-ncols) - For final R outputs and visualisations, elaborate also in
-written form. - Before your final submission on canvas check whether
-your RMD file compiles without errors. Submit RMD file and and its
-knitted version HTML (or pdf) file. Make sure that all your outputs,
-results and comments are visible in the knitted version.
-
-Grading: The points split between the tasks below is: - 20% data
-preprocessing - 40% text mining - 40% PCA
-
-Further hints: - Avoid re-running joining tables several times because
-it may change/affect the matrix dimension. Always run your code from
-fresh if unsure (delete all variables and start from the top).
 
 # Step 0: Data cleaning
 
@@ -60,7 +40,8 @@ movies <- fread('ml-25m/movies.csv', stringsAsFactors=FALSE)
 
 #SELECTING ONLY SMALL DATASET
 movies <- movies[sample(nrow(movies), 0.01*nrow(movies)), ]
-ratings <- ratings[sample(nrow(ratings), 0.01*nrow(ratings)), ]
+ratings <- ratings %>%
+  filter(movieId %in% movies$movieId)
 ```
 
 ```{r}
@@ -196,7 +177,7 @@ ggplot(aes(x=rating)) +
 
 We need to base our recommendations on data, so movies that have been rated by fewer than 20 users will not be included in our final database. We do not know enough about these movies. 
 
-```{r}
+```{r eval=FALSE}
 m <- 20
 movies_at_least_m <- ratings %>%
   group_by(movieId) %>%
@@ -270,7 +251,7 @@ names(recommendation_model)
 
 lapply(recommendation_model, "[[", "description")
 
-recommendation_model$IBCF_realRatingMatrix$parameters
+recommendation_model$LIBMF_realRatingMatrix$parameters
 ```
 
 ```{r}
@@ -283,34 +264,88 @@ df_sparse <- as(df_sparse, "realRatingMatrix")
 normalized_ratings <- normalize(df_sparse)
 
 sampled_data<- sample(x = c(TRUE, FALSE),
-                      size = nrow(normalized_ratings),
+                      size = nrow(df_sparse),
                       replace = TRUE,
                       prob = c(0.8, 0.2)) 
-training_data <- normalized_ratings[sampled_data, ]
-testing_data <- normalized_ratings[!sampled_data, ]
+training_data <- df_sparse[sampled_data, ]
+testing_data <- df_sparse[!sampled_data, ]
 
 rm(ratings)
-rm(movies_at_least_m)
+#rm(movies_at_least_m)
 rm(normalized_ratings)
 rm(df_sparse)
 
 ```
 
-```{r}
-#recommen_model_IBCF <- Recommender(data = training_data,
-#                                   method = "IBCF",
-#                                   parameter = list(k = 350))
+```{r eval=FALSE}
+m <- c(10,20,50,100,200)
+n <- m
+modelName <- c('IBCF', 'UBCF', 'LIBMF')
+search_grid <- expand_grid(m,n,modelName)
+parameters <-c(
+  'IBCF' = list(k = 35),
+  'UBCF' = list(method="Cosine", nn=10),
+  "LIBMF" = NULL
+)
 
-recommen_model_UBCF <- Recommender(data = training_data, method = "UBCF", 
-                                   param=list(method="Cosine", nn=25))
-predicted_recommendations <- predict(object = recommen_model_UBCF,
+get_RMSE <- function(grid_row, df){
+  print(grid_row)
+  
+  df_sparse <- selecting_fav_movies(df_sparse, grid_row[m], grid_row[n])
+  #df_sparse <- as.matrix(df_sparse) 
+  df_sparse <- as(df_sparse, "realRatingMatrix")
+  #normalized_ratings <- normalize(df_sparse)
+
+  sampled_data<- sample(x = c(TRUE, FALSE),
+                      size = nrow(df_sparse),
+                      replace = TRUE,
+                      prob = c(0.8, 0.2)) 
+  
+  training_data <- df_sparse[sampled_data, ]
+  testing_data <- df_sparse[!sampled_data, ]
+  
+  
+  recommen_model <- Recommender(data = training_data,
+                                   method = grid_row[modelName],
+                                   parameter = parameters[grid_row[modelName]])
+  
+  
+  predicted_recommendations <- predict(object = recommen_model,
                                      newdata = testing_data,
                                      type = "ratings",
                                      n = 10)
+set.seed(42)
+
+  e <- evaluationScheme(df_sparse, method="split", train=0.8, given=-5)
+  
+  RMSE.model <- Recommender(getData(e, "train"), method = "UBCF", 
+                          param=list(method="Cosine", nn=25)) # normalise = center
+
+  prediction <- predict(object = RMSE.model, newdata = getData(e, "known"), type="ratings")
+  
+  calcPredictionAccuracy(x = prediction, data = getData(e, "unknown"))
+  
+}
+  
+  
+  
+```
+
+```{r}
+
+recommen_model_UBCF <- Recommender(data = training_data,
+                                   method = 'UBCF',
+                                   parameter = list(method="Cosine", nn=10))
+
+predicted_recommendations <- predict(object = recommen_model_UBCF,
+                                     newdata = testing_data,
+                                     type = "ratings",
+                                     n = 5)
 set.seed(1)
-e <- evaluationScheme(movie_ratings, method="split", train=0.8, given=-5)
+e <- evaluationScheme(df_sparse, method="split", train=0.8, given=-5)
 RMSE.model <- Recommender(getData(e, "train"), method = "UBCF", 
                           param=list(method="Cosine", nn=25)) # normalise = center
+
 prediction <- predict(object = RMSE.model, newdata = getData(e, "known"), type="ratings")
 calcPredictionAccuracy(x = prediction, data = getData(e, "unknown"))
 ```
