@@ -32,15 +32,6 @@ Hints for completing the assignment:
 - For final R outputs and visualisations, elaborate also in written form.
 - Before your final submission on canvas check whether your RMD file compiles without errors. Submit RMD file and and its knitted version HTML (or pdf) file. Make sure that all your outputs, results and comments are visible in the knitted version.
 
-Grading:
-The points split between the tasks below is:
-- 20% data preprocessing
-- 40% text mining
-- 40% PCA
-
-Further hints:
-- Avoid re-running joining tables several times because it may change/affect the matrix dimension. Always run your code from fresh if unsure (delete all variables and start from the top).
-
 # Data Preprocessing
 
 Continue working with the MovieLens Data focusing on the distinct movies (specified by movieId variable) and the tags that users provided for that movie (specified by tag variable).
@@ -68,6 +59,7 @@ You may need to research the solution to this (an example solution could contain
 
 # reading in the data
 tags <- fread('ml-25m/tags.csv') %>% select(movieId, tag)
+# 1093360 by 2
 
 head(tags)
 
@@ -76,20 +68,23 @@ head(tags)
 tb <- tags %>%
   group_by(movieId) %>%
   summarise(tag = paste0(tag, collapse =" ") )
+# 45251 by 2
 
 # filtering for at least 100 words
-# by counting the number of spaces plus one, which is the number of 
+# by counting the number of spaces, which is the number of 
 # words in the string. Then we filter to have only movies with 100 or more words
 tb <- tb %>%
-  mutate(count = str_count(tag, " ") + 1) %>%
+  mutate(count = str_count(tag, " ") ) %>%
   filter(count > 99) %>%
   select(-count)
+# 2918 by 2
 
 # removing special characters from the string
 # special characters are defined as any character that is not a
 # word character, a number or a whitespace
 tb <- tb %>%
   mutate(tag = str_replace_all(tag, "[^[:alnum:] ]", ""))
+# 2918 by 2 
 
 head(tb)
 
@@ -108,18 +103,10 @@ Also you should decide if you should create DTM-TF, DTM-TFIDF, bigram based DTM 
 Ensure to explain each of your data preprocessing decisions.
 Think carefully about how your data will be used (i.e. you are using text mining and PCA to create features to be used in further analysis such as SVM).
 
-If you decide to create a DTM that also contains bigrams, you should be careful as your matrix will become sparse very quickly. 
-After addressing the sparsity, please report the number of bigrams that is present in your final DTM.
-Hints: to use bigrams research:
-- library(RWeka) 
-- VCorpus() and VectorSource() functions
-- NGramTokenizer() and Weka_control() functions
-
-
 ---------------
 My text
 
-The preprocessing we are using consists of three parts. Firstly, we remove all special characters and make everything lowercase. This leaves us with just numbers and lowercase letters, which we can process further. Second, we will remove all stopwords. These are words such as 'the', 'as', and 'in'. These do not add any information to our data but will be used regularly for all movies. 
+The preprocessing we are using consists of three parts. Firstly, we remove all special characters and make everything lowercase. This leaves us with just numbers and lowercase letters, which we can process further. Second, we will remove all stopwords. These are words such as 'the', 'as', and 'in'. These do not add any information to our data but could be used regularly for all movies. Lastly, we stem all of the entries. This will ensure that words are brought back to their 'stem', which for example turns loved lover loving lovely all into love. Because they all represent the same idea, it's best to combine them into one word and not flood our analysis with many different words. 
 
 
 ```{r Text Mining}
@@ -128,8 +115,6 @@ tb <- tb %>%
   rename_at('movieId', ~'doc_id') %>%
     rename_at('tag', ~'text') %>%
   mutate(doc_id = as.character(doc_id))
-#ds <-  DataframeSource(tb)
-#x <- Corpus(ds)
 x <- Corpus(VectorSource(tb$text))
 
 ```
@@ -139,19 +124,47 @@ x <- Corpus(VectorSource(tb$text))
 x <- tm_map(x, tolower) 
 x <- tm_map(x,removeWords, stopwords("english")) 
 x <- tm_map(x,removePunctuation)
+x <- tm_map(x, stripWhitespace) 
+x <- tm_map(x,removeNumbers)
 x <- tm_map(x,stemDocument, language = "english")
 
 ```
 
 ```{r}
-# creating the document term matrix and adding sparsity controls
+# creating the document term matrix
 DTM <- DocumentTermMatrix(x)
-DTM <- removeSparseTerms(DTM, 0.95) 
+
+# First we see what the document term matrix looks like without removing sparse terms
+m <- as.matrix(DTM)
+DTM_tbl <- as_tibble(m) 
+DTM_tidy <- pivot_longer(DTM_tbl, cols = everything(), names_to = "word", values_to = "wordCount")
+DTM_tidy %>%
+  group_by(word) %>%
+  summarise(wordCount = sum(wordCount)) %>%
+  
+ggplot(aes(x = wordCount)) +
+  geom_histogram(bins = 40) +
+  theme_bw() + 
+  labs(
+    title = 'Distribution of word-count is very skewed',
+    y = '# words with count',
+    x = 'Word count'
+  )
+
+
+```
+
+Most words have a very very low word count, which means they were only used in very few words. We do not want to keep these extremely sparse terms in our matrix, because they do not add any information. We would also not be able to generalise based on so few instances of the word.
+
+However, we will remove sparse words that occur in less than 2% of the movies. We set this limit very high, because our PCA will already remove the unnecessary variance, which includes very sparse terms that are uninformative. Therefore, we can keep them in case there is information that we need. 
+
+```{r}
+DTM <- removeSparseTerms(DTM, 0.98) 
 movieIds <- seq(1, nrow(tb), 1)
 rownames(DTM) <- movieIds
 
 m <- as.matrix(DTM)
-DTM_tbl <- as_tibble(m)
+DTM_tbl <- as_tibble(m) 
 DTM_tidy <- pivot_longer(DTM_tbl, cols = everything(), names_to = "word", values_to = "wordCount")
 
 ```
@@ -160,11 +173,40 @@ DTM_tidy <- pivot_longer(DTM_tbl, cols = everything(), names_to = "word", values
 ## Exploratory Analysis
 
 
+```{r}
+# we check the word frequency of highest and lowest words
+DTM_tidy %>%
+  group_by(word) %>%
+  summarise(wordCount = sum(wordCount)) %>%
+  arrange(wordCount) %>%
+  head(10)
+# least used word is bluray
+
+DTM_tidy %>%
+  group_by(word) %>%
+  summarise(wordCount = sum(wordCount)) %>%
+  arrange(-wordCount) %>%
+  head(10)
+# most used words are comedi and end
+```
 
 ```{r}
+DTM_tidy %>%
+  group_by(word) %>%
+  summarise(wordCount = sum(wordCount)) %>%
+  
+ggplot(aes(x = wordCount)) +
+  geom_histogram(bins = 40) +
+  theme_bw() + 
+  labs(
+    title = 'Distribution of word-count is right skewed',
+    y = '# words with count',
+    x = 'Word count'
+  )
 
 ```
 
+Most words have a word-count bewteen 0 and 2500. It's likely that these words will hold the most information. However, some words, such as 'great', have been used very frequently and can also be very informative for the rating of that movie. Therefore, we do not want to use TF-IDF to weight the words with. 
 
 
 # Principle Component Analysis
@@ -194,7 +236,7 @@ dim(DTM_tbl) # 2946 245
 # not sure about PCA
 DTM_tbl <- scale(DTM_tbl, center = FALSE, scale = FALSE)
 pca <- prcomp(DTM_tbl, center = FALSE, scale. = FALSE) 
-summary(pca)$importance 
+summary(pca)$importance
 
 ```
 
@@ -203,18 +245,35 @@ summary(pca)$importance
 VE <- pca$sdev^2
 PVE <- VE / sum(VE) * 100
 CPVE <- cumsum(PVE)
-df <- data.frame(PC = c(1:245),
+df <- data.frame(PC = c(1:699),
                  var_explained = VE,
                  cum_sum_PVE = CPVE)
 
 # --- VARIANCE EXPAINED (SCREEPLOT), VE:
-M <- 245
+M <- 699
 df[1:M,] %>% # select M PCs (rows) and all columns of the dataframe to pass into ggplot
   ggplot(aes(x = PC, y = var_explained)) +
   geom_point(size = 0.5) +
   geom_line() + 
-  scale_x_continuous(limits = c(50, 245) ) + # )breaks = c(1:M)) +
-  scale_y_continuous(limits = c(0, 20)) + 
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red", size = 1.2) +
+  labs(x = "PC Number", y = "VE", 
+       title = "Scree Plot", 
+       subtitle = "PCA on movies data") +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 15, face = "bold", color = "blue"),
+        plot.title = element_text(size = 18, color = "blue"),
+        plot.subtitle = element_text(size = 15, color = "blue") )
+```
+
+```{r}
+# --- VARIANCE EXPAINED (SCREEPLOT), VE:
+M <- 699
+df[1:M,] %>% # select M PCs (rows) and all columns of the dataframe to pass into ggplot
+  ggplot(aes(x = PC, y = var_explained)) +
+  geom_point(size = 0.5) +
+  geom_line() + 
+  scale_x_continuous(limits = c(0, 150) ) +
+  scale_y_continuous(limits = c(0, 200)) + 
   geom_hline(yintercept = 1, linetype = "dashed", color = "red", size = 1.2) +
   labs(x = "PC Number", y = "VE", 
        title = "Scree Plot", 
