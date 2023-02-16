@@ -1,5 +1,5 @@
 ---
-title: "YOUR NAME : AM11 Individual Assignment Part 2: Text Mining + PCA"
+title: "Vivian van Oosten : AM11 Individual Assignment Part 3: SVM and ANN"
 output:
   html_document:
     theme: cosmo
@@ -36,9 +36,20 @@ knitr::opts_chunk$set(
 ```
 
 
+# Introduction
+
+We have a dataset of movies, including their genres, ratings and tags provided by specific users. 
+
+Our goal in this document is to correctly predict the rating of movies. We start off by predicting whether a movie is good or bad, depending on your definition of good and bad. Then, we try to predict the exact average rating that a movie would have. 
+
+Both instances can be used by individuals and companies for various purposes. For the good/bad movie prediction, we are optimizing from a consumer perspective. The goal is to find a movie to watch that night for which we don't have the ratings. We train the model to predict whether a movie is good based on the genres and the PCAs from the text mining of the tags. For the exact rating, we optimize for a company that is trying to assess whether or not to add a movie to their streaming service. For example an airline with a limited amount of movies on its platform. 
+
+
+
 # Creating dataset
 
-First we read in the data. 
+Before we can start any of the modelling, we will create the dataset.
+
 ```{r}
 movies <- fread('ml-25m/movies.csv')
 
@@ -48,12 +59,11 @@ ratings <- fread('ml-25m/ratings.csv')
 
 ```
 
-Only need to run this if we're using a subset of movies.
+Since our PCA features aren't defined for all movies, we only select those movies that have values for PCA. 
 
 ```{r}
 movies <- movies %>%
   filter(movieId %in% features_fromPart2$movieId)
-#movies <- movies[sample(nrow(movies), 0.1*nrow(movies)), ]
 
 ratings <- ratings %>%
   filter(movieId %in% movies$movieId)
@@ -62,7 +72,7 @@ ratings <- ratings %>%
 
 
 
-Removing duplicates in the movies dataset
+To clean our dataset, we remove any duplicates we might have. 
 
 ```{r}
 repeatMovies <- names(which(table(movies$title) > 1))
@@ -87,6 +97,7 @@ rm(i, removeRows, repeatMovieIdLoc, repeatMovieLoc, repeatMovies, tempGenre)}
 
 Next, we need to remove any user that has rated a single movie twice.
 We only keep the highest rating if they have rated a single movie twice. 
+
 ```{r}
 duplicate_ratings_keep <- ratings %>% 
   get_dupes(userId, movieId) %>%
@@ -102,7 +113,8 @@ ratings <- ratings %>%
 ```
 
 
-We get the average rating per movie and the genre dummies for the movie
+Our dataset needs to end up with dummy variables for all the genres we have and the average rating for each movie. These variables are created below.
+
 ```{r}
 # getting the average rating per movie
 av_rating <- ratings %>%
@@ -131,6 +143,7 @@ genres_df <- movies %>%
 ```
 
 Adding all features together to create one dataframe we can use for the tasks following. 
+
 ```{r}
 df <- left_join(av_rating, genres_df, by = 'movieId') %>%
   left_join(features_fromPart2, by = 'movieId')
@@ -141,6 +154,23 @@ df <- left_join(av_rating, genres_df, by = 'movieId') %>%
 
 To start with, we want to predict whether a movie gets an excellent rating, which is defined as a rating above 3.75. Therefore, we create a binary variable y. This is the variable we will try to predict in our SVM. Before we can train our model on the data, we need to split it into a training and test set. 
 
+Before we do this, we see what the average rating distribution of our movies looks like. 
+
+```{r}
+ggplot(df, aes(x = av_rating)) + 
+  geom_histogram() +
+  theme_bw() +
+  labs(
+    title = 'A rating between 3 and 4 is most common',
+    subtitle = "The red line is at 3.75, after which movies are considered 'excellent'",
+    x = 'Average rating',
+    y = '# movies'
+  ) +
+  geom_vline(xintercept = 3.75, linetype="dashed", color = "red")
+```
+
+The good/bad variable is created below. 
+
 ```{r}
 # binarizing the data to make it a classification problem
 svm_df <- df %>%
@@ -149,7 +179,7 @@ svm_df <- df %>%
   select(-av_rating, -title)
 
 # splitting the data
-set.seed(42)  # for reproducibility
+set.seed(42)  
 splitting <- initial_split(svm_df, prop = 0.8)
 train <- training(splitting)
 test  <- testing(splitting)
@@ -157,7 +187,12 @@ test  <- testing(splitting)
 ```
 
 
-Next, we train our model on the trainingset. We have picked a radial kernel, and we cross-validate our data. We're tuning with 10 default values. 
+Next, we train our model on the trainingset. We have picked a radial kernel, and tune our data on the sigma and cost parameters. We're using a 10-fold crossvalidation.
+
+We have used the Kappa as the metric to optimize. This is because we have a very imbalanced dataset. Most movied do not have a rating above 3.75. When datasets are very imbalanced, the accuracy is no longer the best way to assess the performance of the model. To optimize accuracy, the model could simply predict only negatives and still perform relatively well. That is definitely not desired behaviour however, since we would then have no idea what to watch. The kappa measure ensures that we take into account more.
+
+To evaluate our model, we take specificity. This is the probability that it's a good movie if the model says it should be. This is because we do not want to waste our time watching bad movies, so we would rather it is actually a good movie. 
+
 
 ```{r}
 grid <- expand.grid(sigma = seq(0.03,0.05,0.002),
@@ -165,7 +200,7 @@ grid <- expand.grid(sigma = seq(0.03,0.05,0.002),
 svm_tune <- train(
   y ~ ., 
   data = train,
-  method = "svmRadial",         # Radial kernel      
+  method = "svmRadial",       # Radial kernel      
   preProcess = c("center", "scale"),  # center & scale the data
   trControl = trainControl(method = "cv", number = 10), #cross-validation (10-fold) 
   tuneGrid = grid,
@@ -173,22 +208,22 @@ svm_tune <- train(
 )
 ```
 
-To assess the performance of our model, we plot the outcome. 
+To assess the performance of our model, we plot the outcomes for each of the combinations of tuning parameters. 
 
 ```{r}
 
 ggplot(svm_tune) + theme_light()
 print(svm_tune)
-#it looks like C=7, \sigma = 0.016 give the best accuracy
-#dispay and plot results of cross validation
 confusionMatrix(svm_tune)
 
 ```
 
+A higher Kappa represents a better model. Therefore, we need to choose a cost of 3 and a sigma of 0.04. This model has been chosen by the algorithm.
+
+Next, we assess the performance of the model on the test dataset. 
 
 
 ```{r}
-
 #Model validation on the test set
 test_validation = predict(svm_tune, test) 
 confusionMatrix(data = test_validation, as.factor(test$y))
@@ -211,24 +246,58 @@ log_tune <- train(
 )
 
 ggplot(log_tune) + theme_light()
-#print(log_tune)
-#it looks like C=7, \sigma = 0.016 give the best accuracy
-#dispay and plot results of cross validation
-#confusionMatrix(log_tune)
 
-#Model validation on the test set
 test_validation = predict(log_tune, test) 
 confusionMatrix(data = test_validation, as.factor(test$y))
 
+
 ```
 
-With this information we can compare the two. Before we do that however, we need to decide what metric is most important to us, which depends on the use-case. For the purpose of this exercise we are going to be looking for a movie to watch and if we get a new movie, we want to predict which one is going to be good and therefore which one we should watch. We do not want to waste our time watching a bad movie and we do not really care that we will not watch all good movies, there are too many of those anyway. Therefore, the measure we care about is specificity. We see that the logarithmic model has a specificity of 0.39, while the SVM has a specificity of 0.41. This is a minimal difference and not worth the additional complication that the SVM model brings, which increases the likelihood of overfitting. 
+With this information we can compare the two. Before we do that however, we need to decide what metric is most important to us, which depends on the use-case. For the purpose of this exercise we are going to be looking for a movie to watch and if we get a new movie, we want to predict which one is going to be good and therefore which one we should watch. We do not want to waste our time watching a bad movie and we do not really care that we will not watch all good movies, there are too many of those anyway. Therefore, the measure we care about is specificity. We see that the logarithmic model has a specificity of 0.37, while the SVM has a specificity of 0.47. This is quite an improvement and can justify us choosing the more complex SVM model over the logistic model.
 
+# NOTE TO SELF USE PRECISION INSTEAD OF SPECIFICITY
+
+Next, we set the threshold for a good movie at a rating of 4 instead of 3.75, using the same tuning parameters. 
+
+```{r}
+# binarizing the data to make it a classification problem
+svm_df <- df %>%
+  mutate(y = if_else(av_rating > 4, 1, 0),
+         y = as.factor(y)) %>%
+  select(-av_rating, -title)
+
+# splitting the data
+set.seed(42)  # for reproducibility
+splitting <- initial_split(svm_df, prop = 0.8)
+train <- training(splitting)
+test  <- testing(splitting)
+
+grid <- expand.grid(sigma = seq(0.03,0.05,0.002),
+                    C = seq(1, 10, 1))
+svm_tune <- train(
+  y ~ ., 
+  data = train,
+  method = "svmRadial",       # Radial kernel      
+  preProcess = c("center", "scale"),  # center & scale the data
+  trControl = trainControl(method = "cv", number = 10), #cross-validation (10-fold) 
+  tuneGrid = grid,
+  metric = 'Kappa'
+)
+
+test_validation = predict(svm_tune, test) 
+confusionMatrix(data = test_validation, as.factor(test$y))
+
+
+```
+
+We see that our accuracy has increased massively but our specificity has dropped to only 9%. We see that the dataset is even more imbalanced when we take a boundary of 4. This means that we have so few instances of a good movie that the algorithm cannot identify them anymore. If the algorithm says it's a good movie, there's now a 50/50 chance that it actually is a good movie and most good movies are not recognized. This was a lot better for the model with a threshold of 3.75. Therefore, we we should use a more balanced dataset and take 3.75.
 
 
 # Training an ANN model
 
 Knowing whether a movie would be rated good or bad can be useful to decide if you want to watch it, but we need more detailed information to make any more complicated decisions such as whether to add it to your streaming service. To provide this information, we will be building an Artificial Neural Network. This network will predict the exact average rating that the movie will get. 
+
+First we create the test and training datasets.
 
 ```{r}
 # removing the unnecessary title column
@@ -236,27 +305,26 @@ ann_df <- df %>%
   select( -title, -movieId, -`(no genres listed)` ) 
 
 # splitting the data
-set.seed(42)  # for reproducibility
+set.seed(123)  # for reproducibility
 splitting <- initial_split(ann_df, prop = 0.8)
 train <- training(splitting)
 test  <- testing(splitting) 
 ```
 
-```{r}
-ann_df %>%
-  pivot_longer(cols=c(3:22), names_to ='genre', values_to = 'nr') %>%
-  group_by(genre) %>%
-  summarise(n = sum(nr))
-```
+We have already preprocessed the data above. However, we do need to center and scale it for the ANN to handle it properly. We save the mean and standard deviation to be able to denormalise the outcome later.
 
 
 ```{r}
 # since we have previously preprocessed the data,
 # we only need to center and scale it before we can use it
 rec_obj <- recipe(av_rating ~ ., data = train) %>%
-  step_center(all_predictors(), -all_outcomes()) %>%
-  step_scale(all_predictors(), -all_outcomes()) %>%
+  step_center(all_predictors(), all_outcomes()) %>%
+  step_scale(all_predictors(), all_outcomes()) %>%
   prep(data = train)
+
+# in order to allow for denormalisations
+center_history <- rec_obj$steps[[1]]$means["av_rating"] # Keeping the mean
+scale_history  <- rec_obj$steps[[2]]$sds["av_rating"] #and the std 
 ```
 
 Next, we're creating the X and Y sets.
@@ -271,6 +339,10 @@ y_train_vec <- train$av_rating
 y_test_vec  <- test$av_rating
 ```
 
+
+The ANN we have chosen consists of three layers with 32 nodes each. We have set the dropout rate to 0.2 since intially we had a high level of overfitting where our trainingset had an R2 of 0.35 and the testset of 0.25. With a higher dropout rate the overfitting is less extreme. We have a mixture of linear and tan activation functions since our outcome needs to be continuous. The exact combination of nodes, activation functions and layers is based on trial and error. 
+
+
 ```{r}
 # NOTE FOR VIVIAN: TO RUN THIS YOU NEED TO RUN THE FOLLOWING IN THE CONSOLE FIRST: 
 # library(reticulate)
@@ -280,6 +352,7 @@ y_test_vec  <- test$av_rating
 # then and only then will keras run correctly. DO NOT FORGET
 
 # Building our Artificial Neural Network
+set.seed(123)
 model_keras <- keras_model_sequential()
 
 model_keras %>% 
@@ -292,31 +365,31 @@ model_keras %>%
     input_shape        = ncol(x_train_tbl)) %>% 
   
   # Dropout to prevent overfitting
-  layer_dropout(rate = 0.1) %>%
+  layer_dropout(rate = 0.2) %>%
   
   # Second hidden layer
+  layer_dense(
+    units              = 32, 
+    kernel_initializer = "uniform", 
+    activation         = "relu") %>% 
+  
+  # Dropout to prevent overfitting
+  layer_dropout(rate = 0.2) %>%
+  
+    # Third hidden layer
   layer_dense(
     units              = 32, 
     kernel_initializer = "uniform", 
     activation         = "tanh") %>% 
   
   # Dropout to prevent overfitting
-  layer_dropout(rate = 0.1) %>%
-  
-   # Third hidden layer
-  layer_dense(
-    units              = 32, 
-    kernel_initializer = "uniform", 
-    activation         = "linear") %>% 
-  
-  # Dropout to prevent overfitting
-  layer_dropout(rate = 0.1) %>%
+  layer_dropout(rate = 0.2) %>%
   
   # Output layer
   layer_dense(
-    units              = 1, #For multi-classification, the units should correspond to the number of classes
+    units              = 1, # we only need 1 output
     kernel_initializer = "uniform", 
-    activation         = "linear") %>% 
+    activation         = "linear") %>%  # we take a linear activation for our continuous output
   
   # Compile NN
   compile(
@@ -359,21 +432,60 @@ Next, we're evaluating the model:
 scores = model_keras %>% evaluate(as.matrix(x_test_tbl), y_test_vec, verbose = 0)
 print(scores)
 
-print("testing data")
-y_test_pred = model_keras %>% 
-  predict(as.matrix(x_test_tbl)) %>% 
-  as.vector()
-R2 = cor(y_test_vec,y_test_pred)^2
-R2
-
 print("training data")
 y_train_pred = model_keras %>% 
   predict(as.matrix(x_train_tbl)) %>%
   as.vector()
-R2 = cor(y_train_vec, y_train_pred)^2
+# de-normalize to original scale
+y_train_pred <- (y_train_pred * scale_history + center_history) #denormalization
+y_train_vec <- (y_train_vec * scale_history + center_history) #denormalization
+
+R2 = R2(y_train_vec, y_train_pred)
+R2
+
+
+print("testing data")
+y_test_pred = model_keras %>% 
+  predict(as.matrix(x_test_tbl)) %>% 
+  as.vector()
+y_test_vec <- (y_test_vec * scale_history + center_history)
+y_test_pred <- (y_test_pred * scale_history + center_history)
+R2 = R2(y_test_vec,y_test_pred)
 R2
 ```
 
+
+To see how badly or well our model is performing, we compare it against a simple linear regression. 
+
+```{r}
+lm_data <- bake(rec_obj, new_data = train)
+lm_data_test <- bake(rec_obj, new_data = test)
+
+control <- trainControl (
+    method="cv",
+    number=10,
+    verboseIter=FALSE)
+
+linear_model <- train(
+    av_rating ~.,
+    data = lm_data,
+    method = "lm",
+    trControl = control
+   )
+predicted <- predict(linear_model, lm_data_test)
+
+summary(linear_model)
+
+mse <- mean((lm_data_test$av_rating - predicted)^2)
+rmse <- sqrt(mse)
+mse
+```
+
+The R2 for our ANN is 0.36 and the R2 of a linear model is 0.29. This is a bit better, but the difference is not very big. Our ANN is relatively very complicated, with three layers and 32 nodes in each layer. The linear model, compared to this, only has one weight for each variable. Our ANN is a lot more complicated than a linear model, so we should take the linear model in this case to protect against overfitting and overcomplicating our model. 
+
+
+
+For writing the df object to a file, so we don't have to keep rerunning the same code over and over again. 
 ```{r eval=FALSE}
 saveRDS(df, file = "part3_df_object.rds")
 ```

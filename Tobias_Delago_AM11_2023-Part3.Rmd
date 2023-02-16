@@ -1,0 +1,728 @@
+---
+title: "Machine Learning Part 3: SVM & ANN"
+author: "Tobias Delago"
+date: "08/02/2023"
+output:
+  html_document:
+    theme: flatly
+    highlight: zenburn
+    number_sections: yes
+    toc: yes
+    toc_float: 
+      collapsed: FALSE
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE, 
+  warning = FALSE, 
+  size="small")   # slightly smaller font for code
+options(digits = 4)
+
+# default figure size
+knitr::opts_chunk$set(
+  fig.width=7, 
+  fig.height=5,
+  fig.align = "center"
+)
+```
+
+```{r, load_libraries, include = FALSE} 
+library(tidyverse) # the usual stuff: dplyr, readr, and other goodies 
+library(lubridate) # date manipulation
+library(vroom) #import datasets faster
+library(ggplot2) # to create figures
+library(reshape2) #reshape the data
+library(data.table) # for faster dataframe manipulation
+library(janitor) #for cleaning data
+library(dplyr) #for many functions
+library(recommenderlab) #used for matrix
+library(fastDummies) #to create dummy variables
+library(stringr) #String modifications
+library(tm) # Creating easy dummy variables from text
+library(caret) # for SVM
+library(rsample) # for sampling
+library(pROC) # for roc curves
+library(keras) #modeling NN
+library(recipes) #for eficient preprocessing
+library(yardstick) #Tidy methods for measuring model performance
+library(corrr) #for Correlation Analysis
+library(readr) #easy parsing
+library(knitr) # for kable
+
+```
+
+# Data Preparation {.unnumbered}
+
+## Importing PCA Data
+
+In order to enhance reproducibility, the PCs provided by faculty are imported in this step. However, the PCs calculated in Part 2 (Texmining & PCA) had very similar properties than those in the file below and could also be used. 
+
+```{r import svm}
+
+# Import PC file
+pca_import <- readRDS("features_fromPart2.RDS")
+
+```
+
+## Importing and cleaning 
+
+We import both the movie and the rating dataset.
+
+```{r importing}
+
+# Import the movies dataset
+movie_data <- fread("ml-25m/movies.csv",stringsAsFactors=FALSE)
+
+# Import the ratings dataset
+rating_data <- fread("ml-25m/ratings.csv", select = c(1:3))
+
+```
+
+We perform some basic cleaning, this includes keeping only movies that have ratings. Keeping only ratings that have associated movies, eliminating duplicates etc. 
+
+```{r data cleaning}
+
+#Remove duplicate movies
+movie_data_cleaned <- movie_data[!duplicated(movie_data$title),]
+
+#Keeping only ratings that have a movieId in the movie dataset
+rating_data_cleaned <- rating_data[rating_data$movieId %in% movie_data_cleaned$movieId,]
+
+#Eliminating observations where a user has rated the same movie more than once (keep first)
+rating_data_cleaned <- rating_data_cleaned %>%
+    distinct(userId, movieId, .keep_all = TRUE)
+
+# Free memory by deleting unused dataframes
+remove(movie_data)
+remove(rating_data)
+
+```
+
+## Calculating average rating 
+
+We can calculate the average rating for each movie (~ 25.000.000 observations, ~ 60.000 movies).
+
+```{r average rating}
+
+# Calculating the mean for every movie (constitutes one group)
+rating_data_cleaned <- rating_data_cleaned %>% 
+  group_by(movieId) %>% 
+  summarize(average_rating = mean(rating))
+
+rating_data_cleaned %>% 
+  ggplot(aes(x = average_rating))+
+  geom_histogram(bins = 20, color = "white")+
+  labs(title = "Very few movies have an average rating > 4",
+       subtitle = "Distribution of movie ratings",
+       x = "Average Rating",
+       y = "# Movies")+
+  theme_bw()+
+  theme(plot.title = element_text(face = "bold"))
+
+```
+
+## Creating dummy variables 
+
+The genres associated with each movie can be transformed into dummy variables (1 for belongs to that genre, 0 if not). However, since one movie can belong to several genres (e.g Jumanji (1995): Adventure|Children|Fantasy) some data manipulation had to be performed first. We exclude the genre (no genres listed).
+
+```{r dummy with DTM}
+
+# This changes all "|" with whitespaces
+movie_data_genre <- movie_data_cleaned %>%
+  filter(genres != "(no genres listed)") %>% 
+	mutate(genres = str_replace_all(genres, "\\|", " "))
+
+# This creates a corpus
+genre_corp <- Corpus(VectorSource(movie_data_genre$genres)) 
+
+# Count appearances
+genre_dtm <- DocumentTermMatrix(genre_corp)
+
+# Create dataframe
+genre_dtm <- as.matrix(genre_dtm)
+genre_dtm <- as.data.frame(genre_dtm)
+
+# Combining both dataframes
+movie_genre_cleaned <- bind_cols(movie_data_genre, genre_dtm) %>% 
+  select(!"genres")
+
+```
+
+Now that the dummy variables have been created, the final dataset can be created by joining the average rating (response variable) with the principal components + genre dummies (predictor variables):
+
+```{r join all dataframes}
+
+# This joins together the dummies, the rating, and the PCA for each movieId
+movie_data <- movie_genre_cleaned %>%
+  inner_join(pca_import, by = "movieId") %>%
+  inner_join(rating_data_cleaned, by = "movieId")
+
+```
+
+
+# Task: Classification 
+
+## SVM 3.75 
+
+The first step is to create a dummy variable if the movie has been rated as excellent (>3.75 or not).
+
+```{r data preparation svm}
+
+# Create copy to leave original set intact
+movie_classification <- movie_data
+
+# Create dummy if excellent (>3.75) or not
+movie_classification$excellent <- ifelse(movie_classification$average_rating > 3.75, "yes", "no")
+
+# Remove identification columns
+movie_classification <- movie_classification %>% 
+  select(-movieId, -title, -average_rating)
+
+```
+
+We keep 80% of the data in the training set and 20% for the test set. 
+
+```{r training test split}
+
+#split our dataset into training and test set using the outcome variable as strata
+# Create training (80%) and test (20%) sets
+set.seed(123)  # for reproducibility
+movie_split <- initial_split(movie_classification, prop = 0.8, strata = "excellent")
+movie_train <- training(movie_split)
+movie_test  <- testing(movie_split)
+
+```
+
+The SVM can now be trained using k-fold cross validation. The following hyperparameters have been set: folds to 10, method to svmRadial, and the data has been normalized. In addition, it has been optimized for Kappa since this is preferred for unbalanced datasets.
+
+```{r first svm}
+
+set.seed(123)
+
+# we first want to get a broad overview of the hyperparameters
+movie_svm_tune <- train(
+  excellent ~ ., 
+  data = movie_train,
+  method = "svmRadial", # Radial kernel      
+  preProcess = c("center", "scale"),  # center & scale the data
+  trControl = trainControl(method = "cv", number = 10), #cross-validation (10-fold) 
+  metric = "Kappa",
+  tuneLength = 10 #use 10 default values for the main parameter
+)
+
+# We can check the results for gamma (sigma) and C
+ggplot(movie_svm_tune)+
+  labs(title = "Higher accuracy for low cost values",
+       subtitle = "Development of kappa indicator for different C")+
+  theme_light()+
+  theme(plot.title = element_text(face = "bold"))
+
+print(movie_svm_tune)
+
+```
+The optimal parameters that were chosen by the algorithm are the cost factor C = 2 and gamma = 0.415. The best model had an accuracy of 77.7 %.\
+Now that we know the broad range of these values, we can use the expand.grid command to further tune our parameters. 
+
+```{r optimized svm}
+
+set.seed(123)
+# we can now finetune the parameters with grid search
+
+# Use the expand.grid to specify the search space	
+grid <- expand.grid(sigma = c(0.041, 0.042, 0.043, 0.044, 0.045),
+                    C = c(1,1.5,2,2.5,3,3.5))
+
+# Insert the grid in the training algorithm
+movie_svm_tune <- train(
+  excellent ~ ., 
+  data = movie_train,
+  method = "svmRadial",         # Radial kernel      
+  preProcess = c("center", "scale"),  # center & scale the data
+  trControl = trainControl(method = "cv", number = 10),#cross-validation (10-fold)
+  metric = "Kappa",
+  tuneGrid = grid
+)
+
+# Look at results
+ggplot(movie_svm_tune)+
+  labs(title = "Highest accuracy for sigma = 0.44 & C = 1.5",
+       subtitle = "Development of kappa indicator for different sigma & C")+
+  theme_light()+
+  theme(plot.title = element_text(face = "bold"))
+
+print(movie_svm_tune)
+confusionMatrix(movie_svm_tune)
+
+
+```
+As can be seen by the figure, the best model performance was achieved with the cost factor C = 1.5 and gamma = 0.44. This model can now be used to make predictions on the out-of-sample set. 
+
+```{r svm validation}
+
+#Model validation on the test set
+test_validation_svm = predict(movie_svm_tune, movie_test) 
+confusionMatrix(data = test_validation_svm, as.factor(movie_test$excellent))
+
+```
+As can be seen, the Accuracy dropped from 77.8% to 73.5%. Although the cost factor was not set particularly high, we can conclude that there could be some overfitting due to the decrease in accuracy from the in-sample to out-of-sample dataset. Since we performed hyperparameter tuning at different scales without initial restriction it is unlikely that we are dealing with underfitting (too high bias). What is worth noting is the already pretty low specificity at 35.7%, telling us that our model does not predict excellent movies particularly well. It seems that the tags and the combination of genres alone are not sufficient to capture all the variance in the movies ratings. 
+
+
+## Logistic Regression 
+
+Using k-fold cross validation we can perform a logistic regression as comparison. 
+
+```{r logistic}
+
+# 10 fold cross validation, reporting accuracy at a threshold of 50% 
+myControl <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = FALSE
+)
+
+movie_logistic_tune <- train(
+  excellent ~ .,
+  data = movie_train,
+  method="glm",
+  trControl =myControl
+)
+
+confusionMatrix(movie_logistic_tune)
+
+```
+
+```{r logistic validation}
+
+#Model validation on the test set
+test_validation_log = predict(movie_logistic_tune, movie_test) 
+confusionMatrix(data = test_validation_log, as.factor(movie_test$excellent))
+
+```
+We can see that SVM performs better in-sample but the logistic regression is slighty better on the out-of-sample accuracy. It thus seems that the logistic model overfitted a little less than the SVM. Subsequently the ROC curves for logistic regression are printed to see how the AUC changes between the training and testing set (measure for overfitting).
+
+```{r logistic roc}
+
+# Create copy to leave original set intact
+movie_classification_log <- movie_data
+
+# Here comes big change, ROC needs 1 and 0 not yes and no
+# Create dummy if excellent (>3.75) or not 
+movie_classification_log$excellent <- ifelse(movie_classification_log$average_rating > 3.75, 1, 0)
+
+# Remove identification columns
+movie_classification_log <- movie_classification_log %>% 
+  select(-movieId, -title, -average_rating)
+
+#split our dataset into training and test set using the outcome variable as strata
+# Create training (80%) and test (20%) sets
+set.seed(123)  # for reproducibility
+movie_split <- initial_split(movie_classification_log, prop = 0.8, strata = "excellent")
+movie_train_log <- training(movie_split)
+movie_test_log  <- testing(movie_split)
+
+# run logistic 2 on the training set 
+logistic2_in <- glm(excellent~., family="binomial", movie_train_log)
+
+#calculate probability of default in the training sample 
+p_in <- predict(logistic2_in, movie_train_log, type="response")
+
+#ROC curve using in-sample predictions
+ROC_logistic_in <- roc(movie_train_log$excellent,p_in) 
+#AUC using in-sample predictions
+AUC_logistic_in <- round(auc(movie_train_log$excellent,p_in)*100,2)
+
+# run logistic 2 on the testing set 
+logistic2_out <- glm(excellent~., family="binomial", movie_test_log)
+  
+#calculate probability of default out of sample 
+p_out <- predict(logistic2_out, movie_test_log, type="response")
+
+#ROC curve using out-of-sample predictions
+ROC_logistic_out <- roc(movie_test_log$excellent,p_out)
+#AUC using out-of-sample predictions
+AUC_logistic_out <- round(auc(movie_test_log$excellent,p_out)*100,2)
+
+
+#plot in the same figure both ROC curves and print the AUC of both curves in the title
+
+ggroc(list("Logistic model in-sample"=ROC_logistic_in, "Logistic model out-of-sample"=ROC_logistic_out)) +
+  ggtitle(paste("ROC Model Logistic Model in-sample AUC=",AUC_logistic_in,"%",
+                "\nROC Model Logistic out-of-sample AUC=",AUC_logistic_out,"%")) +
+  geom_segment(aes(x = 1, xend = 0, y = 0, yend = 1), color="grey", linetype="dashed") +
+  theme(legend.title=element_blank())
+
+```
+
+The AUC decreases only slightly between the two sets, letting us conclude that logistic is very robust in this particular use case. 
+
+
+## SVM 4.00
+
+We perform the same steps as for the SVM before, with the only difference that the "excellence threshold" is set to 4 instead of 3.75.
+
+The first step is to create a dummy variable if the movie has been rated as excellent (>4.00 or not).
+
+```{r data preparation svm high threshold}
+
+# Create copy to leave original set intact
+movie_classification <- movie_data
+
+# Create dummy if excellent (>4.00) or not
+movie_classification$excellent <- ifelse(movie_classification$average_rating > 4.00, "yes", "no")
+
+# Remove identification columns
+movie_classification <- movie_classification %>% 
+  select(-movieId, -title, -average_rating)
+
+```
+
+We keep 80% of the data in the training set and 20% for the test set. 
+
+```{r training test split high threshold}
+
+#split our dataset into training and test set using the outcome variable as strata
+# Create training (80%) and test (20%) sets
+set.seed(123)  # for reproducibility
+movie_split <- initial_split(movie_classification, prop = 0.8, strata = "excellent")
+movie_train <- training(movie_split)
+movie_test  <- testing(movie_split)
+
+```
+
+The SVM can now be trained using k-fold cross validation. The following hyperparameters have been set: folds to 10, method to svmRadial, and the data has been normalized. 
+
+```{r svm higher threshold}
+
+set.seed(123)
+
+# we first want to get a broad overview of the hyperparameters
+movie_svm_tune <- train(
+  excellent ~ ., 
+  data = movie_train,
+  method = "svmRadial", # Radial kernel      
+  preProcess = c("center", "scale"),  # center & scale the data
+  trControl = trainControl(method = "cv", number = 10), #cross-validation (10-fold) 
+  tuneLength = 10 #use 10 default values for the main parameter
+)
+
+#Model validation on training set
+confusionMatrix(movie_svm_tune)
+
+#Model validation on the test set
+test_validation_svm = predict(movie_svm_tune, movie_test) 
+confusionMatrix(data = test_validation_svm, as.factor(movie_test$excellent))
+
+
+```
+We can observe that the accuracy has massively increased to 93.5%. Also overfitting doesn't seem to be a big problem anymore since the accuracy got even better on the testing set compared to the training set. However, there is great caution needed when interpreting these results!\
+Since the threshold for excellence was set very high to 4.0, only 37 movies of the testing set classified as such. If we look at the specificity, this model achieved only 10% (34% on the >3.75 model). We are basically classifying almost all movies as non excellent and achieve a high accuracy score since the quantity of observations is not balanced (see also histogram at the beginning).
+
+
+# Task: Regression 
+
+## ANN 
+
+### Exploratory Data Analysis {.unnumbered}
+
+Let us first check the distribution of our final dataset we will use for regression. This dataset contains only those movies for which PC values are available.  
+
+```{r exploratory analysis regression}
+
+# See if data is extremely skewed
+movie_data %>% 
+  ggplot(aes(x = average_rating))+
+  geom_histogram(color = "white", bins = 30)+
+  labs(title = "Most movies have a rating between 3 and 4",
+       x = "Average Rating",
+       y = "# Movies")+
+  theme_bw()
+
+```
+
+### Data Cleaning {.unnumbered}
+
+In the office we discussed the possibility to perform ANN only on high rated movies to increase model performance. However, our dataset is already highly limited since we only have PCs for ~2900 movies. Thus limiting the movies to e.g. >3.5 would limit the sample to only a few hundred observations. In addition, we need to separate our dataset in a training, validation, and testing set. This restriction of movie ratings increases the performance of the in sample model but significantly limits the generalizability of our model. After some try&error, the ANN and linear model below have thus been trained on the entire dataset in the final models presented below. 
+
+```{r data preparation regression}
+
+# Create copy to leave original set intact
+movie_regression <- movie_data
+
+# Remove identification column
+movie_regression <- movie_regression %>% 
+  select(-movieId, -title) 
+  #filter(average_rating > 3.5) %>% 
+  #filter(average_rating < 4.0)
+
+```
+
+For ANN, we also want the data to be normalized. This is necessary in this case as the features regarding the genres (only 0 and 1) are on a completely different scale than those resulting from the PCA. To do this, we can use the "recipes" package to create a template and then "bake" the data accordingly. We also want to save the mean and standard deviation so that we can transform the resulting prediction back to the rating between 0 and 5. It has also been tried to apply some smoothing as in the lecture (e.g. log transforming or sqrt) but this did not yield any improved perfromance results. 
+
+```{r normalization regression}
+
+rec_obj <- recipe(average_rating ~ ., movie_regression) %>% 
+    #step_sqrt(average_rating) %>%
+    step_center(all_predictors(), all_outcomes()) %>% #standardize
+    step_scale(all_predictors(), all_outcomes()) %>%
+    prep()
+
+movie_normalized <- bake(rec_obj, movie_regression) #bake according to recipe
+
+#but now we don't have rating values anymore so:
+
+#keep centers for denormalization later
+center_history <- rec_obj$steps[[1]]$means["average_rating"] #I keep the mean
+scale_history  <- rec_obj$steps[[2]]$sds["average_rating"] #and the std to do the reverse process at the end
+
+c("center" = center_history, "scale" = scale_history)
+
+```
+
+The below code tests if the normalized with the recipe has been executed correctly. We expected a sd of 1 and a mean of 0.
+
+```{r testing normalization regression}
+
+# This should give the same as above
+movie_regression %>% 
+  summarize(mean_rating = mean(average_rating),
+            sd_rating = sd(average_rating))
+
+# This should give 0 and 1
+movie_normalized %>% 
+  summarize(mean_rating = mean(average_rating),
+            sd_rating = sd(average_rating))
+
+```
+
+### Creating test sets {.unnumbered}
+
+The next text is to split the normalized dataset into a training set (80%) and a testing set (20%). During the ANN execution at a later stage, the 80%  training set will again be split into a 70% training set and 30% validation set. 
+```{r split regression ANN}
+
+#split our dataset into training and test set 
+# Create training (80%) and test (20%) sets
+set.seed(123)  # for reproducibility
+movie_split <- initial_split(movie_normalized, prop = 0.8)
+movie_train_ann <- training(movie_split)
+movie_test_ann  <- testing(movie_split)
+
+```
+
+Lastly, the deep neural network expects to have the input features in one matrix and the outcome variable in a separate vector. The below code splits the training and testing set into x & y. 
+
+```{r separate into input output ann}
+
+# Creating the X sets
+x_train_ann <- movie_train_ann %>% select(-average_rating) #we only want the features
+x_test_ann  <- movie_test_ann %>% select(-average_rating)
+
+# Creating the Y sets
+y_train_ann <- movie_train_ann %>% select(average_rating) 
+y_test_ann  <- movie_test_ann %>% select(average_rating)
+
+# We look at our final data
+glimpse(x_train_ann)
+glimpse(y_train_ann)
+
+
+```
+
+### Build the ANN model {.unnumbered}
+
+The ANN model can now be built. From lecture content, ,own internet research, and some try&error the following parameters have been set. We use a sequential keras model (based on tensorflow). The first hidden layer contains 29 neurons (= number of input features since 19 genres and 10 PCs), uses uniform weight initialization (not 0) and the rectified linear unit (ReLU) activation function (efficient and stable function to create non-linearities).\
+The second layer uses the same structure as the first one. Since we are not dealing with a huge dataset, it is possible from a computing standpoint to keep the number of neurons fixed at 29 across all hidden layers. This resulted in the fasted convergence time and the highest R^2. It has been shown that adding a third hidden layer did not add any improvement on the key metrics.\
+The output layer is built of only one neuron (as we only want to predict the average rating) and uses a linear activation function (since we do regression). Throughout the neural network a layer dropout rate (number of neurons that are switched off each iteration to avoid overfitting) of 10% has been adopted.\
+In the ANN compiler the loss and metrics are set to mean squared error as we are dealing with regression and not classification. The optimizer is set to Adaptive Moment Estimation (ADAM) which is a popular optimizer that is well-suited for a wide range of tasks since it converges very effectively. The output figure shows the architecture of the ANN (+1 bias at each layer):
+
+![neural network architecture](nn.png)
+
+```{r build ANN}
+
+# Building our Artificial Neural Network
+model_keras <- keras_model_sequential()
+
+model_keras %>% 
+  
+  # First hidden layer
+  layer_dense(
+    units              = 29, #number of neurons
+    kernel_initializer = "uniform", #first set of weights from uniform distribution, not 0!!
+    activation         = "relu", 
+    input_shape        = ncol(x_train_ann)) %>% #because you have 29 features
+  
+  # Dropout to prevent overfitting
+  layer_dropout(rate = 0.1) %>% #each iteration switch of 10% of neurons
+  
+  # Second hidden layer
+  layer_dense( #there is no missing weight thus dense
+    units              = 29, 
+    kernel_initializer = "uniform", 
+    activation         = "relu") %>% 
+  
+  # Dropout to prevent overfitting
+  layer_dropout(rate = 0.1) %>%
+  
+  # Output layer because it is the last one
+  layer_dense(
+    units              = 1, 
+    kernel_initializer = "uniform", 
+    activation         = "linear") %>% 
+  
+  # Compile ANN for regression
+  compile(
+    loss = 'mean_squared_error', #could also be logcosh
+    optimizer = 'adam',      # 'sgd', would be stochastic gradient descent
+    metrics = c("mean_squared_error") #very good for regression
+  )
+
+#display model architecture
+model_keras
+
+```
+
+In the table above we can see that 29 x 29 + 29 = 870 and 29 x 1 + 1 = 30 as we would expect for the number of weights.
+
+### Train the model {.unnumbered}
+
+We can now train the model using the fit command and saving its history. The validation split is 30% (a commonly used value), the batch size is 50 to avoid overfitting, and the number of epochs is set to 50 (similar to what we used in the lecture since we are dealing with a similar sized dataset). The number of epochs is however not a very relevant hyperparameter as we are using the callbacks function if the ANN doesn't learn anymore. This enables to stop the algorithm before all the epochs have been executed and to actually worsen the results by overfitting.
+
+```{r train ANN}
+#stop the model from training after 5 epochs if there is no learning
+callbacks <- list(callback_early_stopping(patience = 5))
+
+# Train model
+history <- model_keras %>% fit(
+  x                = as.matrix(x_train_ann), 
+  y                = as.matrix(y_train_ann),
+  batch_size       = 50, #how many rows from your training set each time to reduce noise
+  epochs           = 50, #how many iterations 35*(each epoch 50 forward)
+  validation_split = 0.30, #to include 30% of the data for model validation, which prevents overfitting.
+  callbacks = callbacks
+)
+
+print(history)
+# Plot the training/validation history of our Keras model
+plot(history)+
+  labs(title = "Learning History for ANN")+
+  theme_bw()
+
+```
+From the figure above we can deduct that the model converges very fast to its final value and is not able to improve anymore after that. 
+
+### Predictions {.unnumbered}
+
+With the trained keras model we can now make predictions on our testing set. 
+
+```{r performance ann}
+
+#make data back to normal ratings again
+predictions_ann <- predict(model_keras, as.matrix(x_test_ann)) 
+
+# de-normalize to original scale
+predictions_ann <- (predictions_ann * scale_history + center_history) #denormalization
+
+real_y_test_ann <- (y_test_ann[["average_rating"]] * scale_history + center_history)
+
+# Create dataframe for Rsquare and RMSE
+ann_results<-data.frame( RMSE = RMSE(predictions_ann, real_y_test_ann), 
+                         Rsquare = R2(predictions_ann, real_y_test_ann))
+
+knitr::kable(ann_results)
+
+# Plot the actual results x-axis against the predictions y-axis
+df_results_ann <- as.data.frame(cbind(predictions_ann, real_y_test_ann))
+df_results_ann %>% 
+  ggplot(aes(y = V1, x = real_y_test_ann))+
+  geom_point()+
+  labs(title = "There is a clear pattern between prediction and actual values",
+       subtitle = "Out-of-sample ANN with three hidden layers",
+       x = "Actual ratings",
+       y = "Predicted ratings")+
+  xlim(2.5,4.5)+
+  ylim(2.5,4.5)+
+  geom_segment(aes(x = 2.5, y = 2.5, xend = 4.5, yend = 4.5))+
+  theme_bw()+
+  theme(plot.title = element_text(face = "bold"))
+
+```
+
+
+## Linear Regression 
+
+To see how our neural network performed we compare it with a very basic linear model. We perform the split again since the linear model can be fed with the features and outcome variable in the same dataframe. 
+
+```{r split regression linear}
+
+#split our dataset into training and test set 
+# Create training (80%) and test (20%) sets
+set.seed(123)  # for reproducibility
+movie_split <- initial_split(movie_regression, prop = 0.8)
+movie_train_lin <- training(movie_split)
+movie_test_lin  <- testing(movie_split)
+
+```
+
+### Build linear model {.unnumbered}
+
+We use k-fold cross validation and all features to train the linear model. Since the features come from two standardized sources (genres 0/1 and PCA), there is no possibility to perform feature engineering routed in a profound understanding of the business problem and how that influenced the inputs.  
+
+```{r linear model}
+
+# Create k-fold parameters
+control <- trainControl (
+    method="cv",
+    number=10,
+    verboseIter=FALSE) #by setting this to true the model will report its progress after each estimation
+
+# train the model and report the results using k-fold cross validation
+model_linear <- train(
+    average_rating ~.,
+    data = movie_train_lin,
+    method = "lm",
+    trControl = control
+   )
+
+summary(model_linear)
+
+```
+
+### Prediction linear {.unnumbered}
+
+The last step is to use the trained linear model to predict the ratings on the testing dataset.
+
+```{r performance linear}
+
+# Predict on testing set
+predictions_linear <- predict(model_linear,movie_test_lin)
+
+# Save RMSE and r squared in df
+linear_results<-data.frame( RMSE = RMSE(predictions_linear, movie_test_lin$average_rating), 
+                            Rsquare = R2(predictions_linear, movie_test_lin$average_rating))
+
+knitr::kable(linear_results)
+
+# Plot the actual results x-axis against the predictions y-axis
+df_results_lin <- as.data.frame(cbind(predictions_linear, movie_test_lin$average_rating))
+
+df_results_lin %>% 
+  ggplot(aes(y = predictions_linear, x = V2))+
+  geom_point()+
+  labs(title = "There is a clear pattern between prediction and actual values",
+       subtitle = "Out-of-sample Linear model with k-fold cross validation",
+       x = "Actual ratings",
+       y = "Predicted ratings")+
+  xlim(2.5,4.5)+
+  ylim(2.5,4.5)+
+  geom_segment(aes(x = 2.5, y = 2.5, xend = 4.5, yend = 4.5))+
+  theme_bw()+
+  theme(plot.title = element_text(face = "bold"))
+
+
+```
+
+The R^2 from the linear model with 31.1% is significantly lower than the R^2 achieved from the Artificial Neural Network with 41.7%. We can thus conclude that the ratings in this dataset are in general difficult to predict given the features available. This intuitively makes sense since the gerne and some tags alone are not sufficient to determine how good a movie will be perceived. The ANN is however able to capture this pattern better. In both cases we can see that the model does not perform particularly well on low rated movies (below 3.0), continuously overestimating their rating. 
+
+
