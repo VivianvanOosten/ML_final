@@ -1,5 +1,5 @@
 ---
-title: "YOUR NAME : AM11 Individual Assignment Part 2: Text Mining + PCA"
+title: "Vivian van Oosten : AM11 Individual Assignment Part 2: Text Mining + PCA"
 output:
   html_document:
     theme: cosmo
@@ -13,6 +13,7 @@ output:
 ```{r setup, include=FALSE}
 library(knitr)
 library(tidyverse)
+library(data.table)
 library(tm) # package for text mining  
 library(SnowballC) # for stemming words
 library(stringr) # package to count number of words in a string
@@ -20,40 +21,19 @@ library(stringr) # package to count number of words in a string
 
 knitr::opts_chunk$set(
   tidy = FALSE,   # display code as typed
-  size = "small") # slightly smaller font for code
+  size = "small",# slightly smaller font for code
+  warning = FALSE,
+  message = FALSE) 
 ```
 
-# Assignment Completion Hints (DELETE THIS SECTION BEFROE SUBMITTING):
+# Introduction
 
-Hints for completing the assignment: 
-- Ensure to document your code very well explaining what your lines of code do
-- At every step that makes sense, print out the current results in order to be able to see your answers without running your code (i.e. the HTML knitted file should show the results of that chunk of code)
-- For EVERY new matrix you create during your work progress, print also their dimensions (nrows, ncols)
-- For final R outputs and visualisations, elaborate also in written form.
-- Before your final submission on canvas check whether your RMD file compiles without errors. Submit RMD file and and its knitted version HTML (or pdf) file. Make sure that all your outputs, results and comments are visible in the knitted version.
+The tags users give to the movies they rate can be very informative. Tags like 'great' or 'terrible' can help us predict the rating and ultimately determine what movies we want to watch. We can also use the tags to group the movies and see which ones are similar.
+
+In this document we will preprocess the tags data to form a document-term matrix. This matrix will then be used in a Principal Component Analysis to remove any variance that we do not need and reduce the matrix to fewer dimensions. The goal is to prepare the data to use the principal components in machine learning analysis in the future. 
+
 
 # Data Preprocessing
-
-Continue working with the MovieLens Data focusing on the distinct movies (specified by movieId variable) and the tags that users provided for that movie (specified by tag variable).
-In this section you will work with the large dataset of 25 million movie ratings. provided by ml-25m.zip located here: https://grouplens.org/datasets/movielens/25m/ 
-Within the zipped file you will find a csv file called "tags.csv".
-It contains 1 million tag observations provided by users for 62000 movies.  
-
-The overall task of Part 2 is two fold:
-- Perform Text Mining on the tag data to obtain a Document Term Matrix
-- Perform dimensionality reduction using PCA to obtain scores/coordinates (i.e. new features) which will be used in the next Part 3 with Christos.
-
-Start by reading in the dataset "ml-25m/tags.csv" and only keep the movieId and the tag columns (the resulting dimensionality should be 1,093,360 by 2).
-
-Next, create a dataframe called tb which contains unique movies with a single tag per each movie (i.e. aggregate the tags from different users per each movie into a single string).
-The resulting tb dimensionality should be 45,251 by 2.
-
-Next, only keep those movies (observations / rows) for which the string word count is 100 or more (i.e. for which the tag contains at least 100 words providing the users feedback on that movie). 
-This is to ensure that we have enough text for each movie which will become a document in the Document Term Matrix.
-The resulting tb dimensionality should be 2918 x 2.
-
-Lastly, remove any special characters from all of the tags.
-You may need to research the solution to this (an example solution could contain gsub() function). 
 
 ```{r Read Data}
 
@@ -80,37 +60,24 @@ tb <- tb %>%
 # 2918 by 2
 
 # removing special characters from the string
-# special characters are defined as any character that is not a
-# word character, a number or a whitespace
+# special characters are defined as any character that
+# is not an alphanumeric character
 tb <- tb %>%
   mutate(tag = str_replace_all(tag, "[^[:alnum:] ]", ""))
 # 2918 by 2 
 
 head(tb)
 
-
-
 ```
 
 # Text Mining 
-
-Your task is to build a Document Term Matrix containing individual movies as documents and terms/words occurring in tags as columns. 
-Hint: when loading data from a dataframe you can use Corpus(VectorSource())
-
-It is up to you to decide the best way to preprocess the data: e.g. make all words lower case, remove punctuation etc.
-You may decide to remove sparse terms, if you do, explain what you did and how you did it. 
-Also you should decide if you should create DTM-TF, DTM-TFIDF, bigram based DTM etc, and justify your answer.
-Ensure to explain each of your data preprocessing decisions.
-Think carefully about how your data will be used (i.e. you are using text mining and PCA to create features to be used in further analysis such as SVM).
-
----------------
-My text
 
 The preprocessing we are using consists of three parts. Firstly, we remove all special characters and make everything lowercase. This leaves us with just numbers and lowercase letters, which we can process further. Second, we will remove all stopwords. These are words such as 'the', 'as', and 'in'. These do not add any information to our data but could be used regularly for all movies. Lastly, we stem all of the entries. This will ensure that words are brought back to their 'stem', which for example turns loved lover loving lovely all into love. Because they all represent the same idea, it's best to combine them into one word and not flood our analysis with many different words. 
 
 
 ```{r Text Mining}
 
+# Creates the corpus we will be using to make the DTM
 tb <- tb %>%
   rename_at('movieId', ~'doc_id') %>%
     rename_at('tag', ~'text') %>%
@@ -120,11 +87,14 @@ x <- Corpus(VectorSource(tb$text))
 ```
 
 ```{r}
-# making everything lower-case
+# making everything lower-case, remove stop words,
+# remove punctuation, removing excess whitespace,
+# removing numbers and stemming the document
+# in that order
 x <- tm_map(x, tolower) 
 x <- tm_map(x,removeWords, stopwords("english")) 
 x <- tm_map(x,removePunctuation)
-x <- tm_map(x, stripWhitespace) 
+#x <- tm_map(x, stripWhitespace) 
 x <- tm_map(x,removeNumbers)
 x <- tm_map(x,stemDocument, language = "english")
 
@@ -142,6 +112,7 @@ DTM_tidy %>%
   group_by(word) %>%
   summarise(wordCount = sum(wordCount)) %>%
   
+# plotting the word-count frequencies 
 ggplot(aes(x = wordCount)) +
   geom_histogram(bins = 40) +
   theme_bw() + 
@@ -159,6 +130,7 @@ Most words have a very very low word count, which means they were only used in v
 However, we will remove sparse words that occur in less than 2% of the movies. We set this limit very high, because our PCA will already remove the unnecessary variance, which includes very sparse terms that are uninformative. Therefore, we can keep them in case there is information that we need. 
 
 ```{r}
+# now removing sparse terms from the DTM and redoing the creation of the dataframe
 DTM <- removeSparseTerms(DTM, 0.98) 
 movieIds <- seq(1, nrow(tb), 1)
 rownames(DTM) <- movieIds
@@ -167,10 +139,17 @@ m <- as.matrix(DTM)
 DTM_tbl <- as_tibble(m) 
 DTM_tidy <- pivot_longer(DTM_tbl, cols = everything(), names_to = "word", values_to = "wordCount")
 
+print(head(DTM_tbl))
+print(head(DTM_tidy))
+
 ```
 
 
-## Exploratory Analysis
+# Exploratory Analysis
+
+Before we start the PCA, we explore the data a little. 
+
+First, we print the words with the highest and lowest frequency. This gives us an idea of the kind of words that could end up being important in our analysis.
 
 
 ```{r}
@@ -180,15 +159,21 @@ DTM_tidy %>%
   summarise(wordCount = sum(wordCount)) %>%
   arrange(wordCount) %>%
   head(10)
-# least used word is bluray
+```
 
+The words with the lowest frequency are kaf and congress. Interestingly, these words appear to not make a lot of sense. They also only occur in max 60 out of 700 documents, so they are not very important. It could be that these are titles or concepts in a specific movie and therefore only mentioned for that movie or movieseries. 
+
+
+```{r}
 DTM_tidy %>%
   group_by(word) %>%
   summarise(wordCount = sum(wordCount)) %>%
   arrange(-wordCount) %>%
   head(10)
-# most used words are comedi and end
 ```
+
+The words with the highest frequency are comedy, end and sci-fi. Considering those can describe a large number of movies, this is not a surprising result. 
+
 
 ```{r}
 DTM_tidy %>%
@@ -206,40 +191,26 @@ ggplot(aes(x = wordCount)) +
 
 ```
 
-Most words have a word-count bewteen 0 and 2500. It's likely that these words will hold the most information. However, some words, such as 'great', have been used very frequently and can also be very informative for the rating of that movie. Therefore, we do not want to use TF-IDF to weight the words with. 
+Most words have a word-count bewteen 0 and 2500. It's likely that these words will hold the most information. However, some words, such as 'great', have been used very frequently and can also be very informative for the rating of that movie. Therefore, we do not want to use TF-IDF to weight the words with. The amount that a word occurs for other movies does not influence the importance that the word has for one specific movie in this case. 
 
 
 # Principle Component Analysis
 
-Now that you have a DTM, we can use it in an unsupervised machine learning algorithm that can reduce the dimensionality of the data. 
-Specifically we have terms/words that describe each movie, however likely we have way too many columns and should only use a reduced amount of columns in our further analysis.
-For example you may wish to run a classification algorithm such as an SVM as a final step in order to be able to create a model that can predict a movie's rating based on some features, including the features produced as a result of running the PCA. 
+In order to further reduce the dimensionality of the data and create a dataset we could comfortable use for SVM, we run a PCA on the document term matrix. We started out with 699 columns in our Document Term Matrix. 
 
-Therefore your next task is to run the PCA on the Document Term Matrix that you designed above.
-As a result of the PCA you should provide the PC coordinates/scores to be used as features in Part 3.
-Crucially, you must decide on the number of these new columns (containing the PC scores) that should be used, i.e. report what dimensionality you started with (your final DTM number of columns) and what dimensionality you decided to reduce the data to (number of PCs you decide to keep).
-Report your key decisions:
-- PCA data preprocessing 
-- Analysis of the variance
-- Reasons for keeping the number of PCs you decided to keep
-As the final step ensure to extract and save the relevant number of new columns (containing the PC scores).
-
-
-------------------------
-MY TEXT
-
-In order to further reduce the dimensionality of the data and create a dataset we could comfortable use for SVM, we run a PCA on the document term matrix. We started out with 245 columns. 
+In our preprocessing, we center the data to 0 but we do not scale it, since scaling the data makes the PCA perform much worse. With scaling, it only explains 10% of the variance with 5 columns, while without scaling it explains over 40%. This is also related to our decision not to use tfifd, since scaling the data would perform a similar role. 
 
 ```{r PCA}
-dim(DTM_tbl) # 2946 245
+dim(DTM_tbl) # 2918 699
 
-# not sure about PCA
-DTM_tbl <- scale(DTM_tbl, center = FALSE, scale = FALSE)
+DTM_tbl <- scale(DTM_tbl, center = TRUE, scale = FALSE)
 pca <- prcomp(DTM_tbl, center = FALSE, scale. = FALSE) 
+# printing the importance of the first 50 components
 summary(pca)$importance[, 1:50]
 
 ```
 
+The table shows part of the story, but to choose the optimal number of columns, we use the below visualisation of variance explained as well.
 
 ```{r}
 VE <- pca$sdev^2
@@ -265,7 +236,7 @@ df[1:M,] %>% # select M PCs (rows) and all columns of the dataframe to pass into
         plot.subtitle = element_text(size = 15, color = "blue") )
 ```
 
-Clearly the additional relevance of columns decreases very quickly. Below we take a closer look at the plot to determine the exact dimensions we want to take. 
+Clearly the additional relevance of columns decreases very quickly. Below we take a closer look at the plot to determine the exact dimensions we want to take. We select a PC number between 0 and 150, since somewhere before there the elbow occurs that we want to take. 
 
 ```{r}
 # --- VARIANCE EXPAINED (SCREEPLOT), VE:
@@ -286,10 +257,15 @@ df[1:M,] %>% # select M PCs (rows) and all columns of the dataframe to pass into
         plot.subtitle = element_text(size = 15, color = "blue") )
 ```
 
-Based on this plot, we will keep 25 columns, since the curve levels off after that. This will explain 69% of the variance in the data. This is well over half, which is very good given taht we went from 699 variables to 25. 
+Based on this plot, we will keep 25 columns. This is approximately the point where the curve levels off, and each additional column adds less information from there on out. This set of components will explain 69% of the variance in the data, as we can see in the table above. This is well over half, which is quite good given that we went from 699 variables to 25. 
+
+We select these features so that we could use them in the analysis from here on out. 
 
 ```{r}
 # selecting only the features we want
 pca_features <- pca$x[, 1:25]
+
+# to use the features later, we have saved them to an RDS object
+#saveRDS(pca_features, 'part2_pca_features_object.rds')
 ```
 
