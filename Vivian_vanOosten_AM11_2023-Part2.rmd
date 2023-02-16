@@ -236,7 +236,7 @@ dim(DTM_tbl) # 2946 245
 # not sure about PCA
 DTM_tbl <- scale(DTM_tbl, center = FALSE, scale = FALSE)
 pca <- prcomp(DTM_tbl, center = FALSE, scale. = FALSE) 
-summary(pca)$importance
+summary(pca)$importance[, 1:50]
 
 ```
 
@@ -265,6 +265,8 @@ df[1:M,] %>% # select M PCs (rows) and all columns of the dataframe to pass into
         plot.subtitle = element_text(size = 15, color = "blue") )
 ```
 
+Clearly the additional relevance of columns decreases very quickly. Below we take a closer look at the plot to determine the exact dimensions we want to take. 
+
 ```{r}
 # --- VARIANCE EXPAINED (SCREEPLOT), VE:
 M <- 699
@@ -282,5 +284,12 @@ df[1:M,] %>% # select M PCs (rows) and all columns of the dataframe to pass into
         axis.title = element_text(size = 15, face = "bold", color = "blue"),
         plot.title = element_text(size = 18, color = "blue"),
         plot.subtitle = element_text(size = 15, color = "blue") )
+```
+
+Based on this plot, we will keep 25 columns, since the curve levels off after that. This will explain 69% of the variance in the data. This is well over half, which is very good given taht we went from 699 variables to 25. 
+
+```{r}
+# selecting only the features we want
+pca_features <- pca$x[, 1:25]
 ```
 
