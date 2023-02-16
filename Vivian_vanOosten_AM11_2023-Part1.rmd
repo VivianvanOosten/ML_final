@@ -37,11 +37,6 @@ We load the data and inspect it to see what our columns are. We have a column fo
 ```{r}
 ratings <- fread('ml-25m/ratings.csv')
 movies <- fread('ml-25m/movies.csv', stringsAsFactors=FALSE)
-
-#SELECTING ONLY SMALL DATASET
-movies <- movies[sample(nrow(movies), 0.01*nrow(movies)), ]
-ratings <- ratings %>%
-  filter(movieId %in% movies$movieId)
 ```
 
 ```{r}
@@ -100,6 +95,8 @@ rm(i, removeRows, repeatMovieIdLoc, repeatMovieLoc, repeatMovies, tempGenre)
 Next, we need to remove any user that has rated a single movie twice.
 We only keep the highest rating if they have rated a single movie twice. 
 ```{r}
+ratings <- ratings[sample(1:nrow(ratings), 0.05*nrow(ratings)), ]
+
 duplicate_ratings_keep <- ratings %>% 
   get_dupes(userId, movieId) %>%
   group_by(userId, movieId) %>%
@@ -116,6 +113,16 @@ ratings <- ratings %>%
 
 Our dataset now consists of unique movies and unique ratings. 
 
+```{r}
+#SELECTING ONLY SMALL DATASET
+#movies <- movies[sample(1:nrow(movies), 0.05*nrow(movies)), ]
+#ratings <- ratings %>%
+#  filter(movieId %in% movies$movieId)
+
+#ratings <- ratings[sample(1:nrow(ratings), 0.05*nrow(ratings)), ]
+
+```
+
 
 # Step 1: Exploratory Analysis
 
@@ -124,7 +131,7 @@ To investigate the distribution of the ratings of our dataset, we make 3 histogr
 
 The general histogram below shows that users are more likely to choose whole points for their ratings than half points, with 4 being the most common rating and 0.5 the least common. We see a left skewed distribution. In general, a relatively positive rating (3+) is much more common than a negative rating (less than 3). 
 
-```{r}
+```{r eval=FALSE}
 ggplot(data = ratings, mapping = aes(x=rating)) +
   geom_bar() +
   labs(
@@ -137,7 +144,7 @@ ggplot(data = ratings, mapping = aes(x=rating)) +
 
 Next we plot the average ratings of each movie. We see that most movies have an average rating of around 3, with very few movies having 1 or 5 as an average rating. 
 
-```{r}
+```{r eval=FALSE}
 ratings %>%
   group_by(movieId) %>%
   summarise(rating = mean(rating)) %>%
@@ -155,7 +162,7 @@ ggplot(aes(x=rating)) +
 
 
 
-```{r}
+```{r eval=FALSE}
 ratings %>%
   group_by(userId) %>%
   summarise(rating = mean(rating)) %>%
@@ -218,12 +225,12 @@ df_sparse <- sparseMatrix(
   i = ratings$row, 
   j = ratings$col,
   x = ratings$rating,
-  dimnames = list(users,
-                  movies)
+  dimnames = list(users, movies),
+  repr = 'C'
 )
 
 dim(df_sparse)
-# [1] 1000000   26000
+# [1] 145461   2933
 ```
 
 ```{r}
@@ -231,16 +238,18 @@ dim(df_sparse)
 selecting_fav_movies <- function(df, m, n) {
   # number of nonzero per column
   xx <- diff(df@p)
+ # print(df@p)
   
-  # finding number of nonzero per row
-  yy <- tabulate(df@i + 1)
+  # number of nonzero per row
+  yy <- tabulate(df@i +1)
   
+  # filtering for the bottom users and movies
   df <- df[df[yy > m]]
   df <- df[df[xx > n]]
   
-  #df[rowCounts(df) > n][colCounts(df) > m] # at least m users viewed each movie 
   df
 }
+
 ```
 
 
@@ -251,80 +260,98 @@ names(recommendation_model)
 
 lapply(recommendation_model, "[[", "description")
 
-recommendation_model$LIBMF_realRatingMatrix$parameters
+recommendation_model$IBCF_realRatingMatrix$parameters
 ```
 
-```{r}
-m <- 1
-n <- 4
 
-#df_sparse <- selecting_fav_movies(df_sparse, m, n)
-#df_sparse <- as.matrix(df_sparse) 
-df_sparse <- as(df_sparse, "realRatingMatrix")
-normalized_ratings <- normalize(df_sparse)
-
-sampled_data<- sample(x = c(TRUE, FALSE),
-                      size = nrow(df_sparse),
-                      replace = TRUE,
-                      prob = c(0.8, 0.2)) 
-training_data <- df_sparse[sampled_data, ]
-testing_data <- df_sparse[!sampled_data, ]
-
-rm(ratings)
-#rm(movies_at_least_m)
-rm(normalized_ratings)
-rm(df_sparse)
-
-```
-
-```{r eval=FALSE}
+```{r }
 m <- c(10,20,50,100,200)
-n <- m
+n <- c(10,20,50,100,200)
 modelName <- c('IBCF', 'UBCF', 'LIBMF')
 search_grid <- expand_grid(m,n,modelName)
-parameters <-c(
-  'IBCF' = list(k = 35),
-  'UBCF' = list(method="Cosine", nn=10),
-  "LIBMF" = NULL
-)
 
-get_RMSE <- function(grid_row, df){
-  print(grid_row)
-  
-  df_sparse <- selecting_fav_movies(df_sparse, grid_row[m], grid_row[n])
-  #df_sparse <- as.matrix(df_sparse) 
-  df_sparse <- as(df_sparse, "realRatingMatrix")
-  #normalized_ratings <- normalize(df_sparse)
+#create data frame with 0 rows and 3 columns
+results <- data.frame(matrix(ncol = 6, nrow = 0))
 
-  sampled_data<- sample(x = c(TRUE, FALSE),
-                      size = nrow(df_sparse),
-                      replace = TRUE,
-                      prob = c(0.8, 0.2)) 
-  
-  training_data <- df_sparse[sampled_data, ]
-  testing_data <- df_sparse[!sampled_data, ]
-  
-  
-  recommen_model <- Recommender(data = training_data,
-                                   method = grid_row[modelName],
-                                   parameter = parameters[grid_row[modelName]])
-  
-  
-  predicted_recommendations <- predict(object = recommen_model,
-                                     newdata = testing_data,
-                                     type = "ratings",
-                                     n = 10)
-set.seed(42)
+#provide column names
+colnames(results) <- c('m', 'n', 'modelName', 'RMSE', 'MSE', 'MAE')
 
-  e <- evaluationScheme(df_sparse, method="split", train=0.8, given=-5)
+for (m_temp in m){
+  for (n_temp in n){
+    for (modelName_temp in modelName){
+      
+      print(m_temp)
+      print(n_temp)
+      print(modelName_temp)
+    
+    movies_at_least_m <- ratings %>%
+      group_by(movieId) %>%
+      filter(n() >= m_temp) %>%
+      select(movieId) %>%
+      unique()
+    
+    users_at_least_n <- ratings %>%
+      group_by(userId) %>%
+      filter(n() >= n_temp) %>%
+      select(userId) %>%
+      unique()
+        
+   ratings_temp <- ratings %>%
+     filter(
+       userId %in% users_at_least_n$userId,
+       movieId %in% movies_at_least_m$movieId
+     )
+   
+    print("Created temp")
+      
+    movies <- unique(ratings_temp$movieId)
+    users <- unique(ratings_temp$userId)
+    
+    ratings_temp$col <- match(ratings_temp$movieId, movies)
+    ratings_temp$row <- match(ratings_temp$userId, users)
+    
+    df_sparse <- sparseMatrix(
+      i = ratings_temp$row, 
+      j = ratings_temp$col,
+      x = ratings_temp$rating,
+      dimnames = list(users, movies),
+      repr = 'C'
+    )
+      
+    print("Created sparse")
+      
+  df_temp <- as(df_sparse, "realRatingMatrix")
+  #df_temp <- df_sparse[rowCounts(df_sparse) > n_temp,
+                            #  colCounts(df_sparse) > m_temp]
   
-  RMSE.model <- Recommender(getData(e, "train"), method = "UBCF", 
-                          param=list(method="Cosine", nn=25)) # normalise = center
+  if (modelName_temp == 'IBCF'){
+    parameters = list(k = 350)
+  } else if (modelName_temp == 'UBCF'){
+    parameters = list(nn=10)
+  } else if (modelName_temp == 'LIBMF') {
+    parameters = list(dim = 10)
+  }
+  
 
-  prediction <- predict(object = RMSE.model, newdata = getData(e, "known"), type="ratings")
+  e <- evaluationScheme(df_temp, method="split", train=0.8, given=-5)
+    
+  RMSE.model <- Recommender(getData(e, "train"), method = modelName_temp, 
+                          parameter = parameters) # normalise = center
   
-  calcPredictionAccuracy(x = prediction, data = getData(e, "unknown"))
+  print("Initial recomender done")
   
+  prediction <- predict(object = RMSE.model, newdata = getData(e, "known") , type="ratings")
+  
+  row <- calcPredictionAccuracy(x = prediction, data = getData(e, "unknown"))
+  
+  row$m <- m_temp
+  row$n <- n_temp
+  row$modelName <- modelName_temp
+  
+  results <- rbind(results, row)
+  
+}
+}
 }
   
   
@@ -332,33 +359,77 @@ set.seed(42)
 ```
 
 ```{r}
-
-recommen_model_UBCF <- Recommender(data = training_data,
-                                   method = 'UBCF',
-                                   parameter = list(method="Cosine", nn=10))
-
-predicted_recommendations <- predict(object = recommen_model_UBCF,
-                                     newdata = testing_data,
-                                     type = "ratings",
-                                     n = 5)
-set.seed(1)
-e <- evaluationScheme(df_sparse, method="split", train=0.8, given=-5)
-RMSE.model <- Recommender(getData(e, "train"), method = "UBCF", 
-                          param=list(method="Cosine", nn=25)) # normalise = center
-
-prediction <- predict(object = RMSE.model, newdata = getData(e, "known"), type="ratings")
-calcPredictionAccuracy(x = prediction, data = getData(e, "unknown"))
+saveRDS(results, 'part1_results_object.rds')
 ```
 
 
 ```{r}
-recommen_model_IBCF <- Recommender(data = training_data,
-                                   method = "IBCF",
-                                   parameter = list(k = 10))
+# plotting the results in a nice graph
+results %>% 
+  filter(n == 50) %>%
+ggplot(aes(x = m, y = RMSE, color = modelName)) + 
+  geom_line() +
+  theme_bw() +
+  labs(
+    title = 'Model based CFs perform the best',
+    color = 'Model type'
+  )
+```
 
-predicted_recommendations <- predict(object = recommen_model_IBCF,
-                                     newdata = testing_data,
-                                     n = top_recommendations)
+```{r}
+# plotting the results in a nice graph
+results %>% 
+  filter(m == 50) %>%
+ggplot(aes(x = n, y = RMSE, color = modelName)) + 
+  geom_line() +
+  theme_bw() +
+  labs(
+    title = 'Model based CFs perform the best',
+    color = 'Model type'
+  )
+```
+
+```{r}
+library(viridis)
+# plotting the results in a nice graph
+results %>% 
+  mutate(m = as.factor(m),
+         n = as.factor(n)) %>%
+ggplot(aes(x = m, y = n, fill = RMSE)) + 
+  facet_wrap(~modelName) + 
+  geom_tile() +
+  scale_fill_viridis(direction = -1) +
+  theme_bw() +
+  labs(
+    title = 'Model based CFs perform the best',
+    color = 'RMSE'
+  )
 ```
 
 
+# Conclusion
+
+The different models perform vastly differently on same data and the same combination of m and n. This shows clearly that the different methods can be applied to different situations. 
+In our case, the model based CF with matrix factorization performed better than the other item&user based models. The matrix factorization simplifies the users and movies we are using by aggregating similar ones into 'superusers' and 'supermovies'. These represent a group of similar entries. While user-item interactions are very sparse, the supergroups have a clearer idea of the interaction between groups and are able to smooth out rare events. Given the very sparse data we have, it is not very surprising that such an approach works best of all.
+Our best model has m = 50, n = 50 and uses the LIMBF model. 
+
+
+```{r eval=FALSE}
+saveRDS(training_data, file = "part1_training_data_object.rds")
+
+saveRDS(testing_data, file = "part1_testing_data_object.rds")
+
+saveRDS(df_sparse, file = "part1_df_sparse_object.rds")
+
+```
+
+
+```{r eval=FALSE}
+training_data <- readRDS( "part1_training_data_object.rds")
+
+testing_data <- readRDS("part1_testing_data_object.rds")
+
+df_sparse <- readRDS("part1_df_sparse_object.rds")
+
+
+```
