@@ -1,5 +1,5 @@
 ---
-title: "YOUR NAME : AM11 Individual Assignment Part 1: Recommendation Systems"
+title: "Vivian van Oosten : AM11 Individual Assignment Part 1: Recommendation Systems"
 output:
   html_document:
     theme: cosmo
@@ -30,6 +30,13 @@ knitr::opts_chunk$set(
 ```
 
 
+# Introduction
+
+One of the recommendation systems used most regularly is the one used by various streaming services, such as Netflix and HBO. They usually have a section specifically made to recommend movies to their customers. They use some form of recommendation algorithm to do this for their customers. 
+
+We have received a dataset of movies and their ratings by a lot of users. With this data, we want to create the best recommendation system we can. To do so, we will first clean and prepare the data and then compare three different recommendation systems. These three include a user-user system, an item-item system and a model-based matrix factorization system. The models will be explained more deeply in the assignment. 
+
+
 # Step 0: Data cleaning
 
 We load the data and inspect it to see what our columns are. We have a column for user ID, movie ID, rating and a timestamp. This means that every individual rating is a row in our dataframe, with the corresponding values. 
@@ -44,6 +51,9 @@ movies <- fread('ml-25m/movies.csv', stringsAsFactors=FALSE)
 skimr::skim(ratings)
 skimr::skim(movies)
 ```
+
+We check to see if there are any double entries in the ratings and movie datasets. Keeping these doubles would give a higher weight to the users and/or movies that have double entries for no good reason. Therefore, we will remove them in the next block of code.
+
 ```{r}
 # checking for duplicate values
 length(unique(ratings$userId))
@@ -53,22 +63,6 @@ length(unique(movies$movieId))
 length(unique(movies$title))
 # theres a difference between the number of IDs (higher) and the number of titles (lower)
 ```
-
-```{r, eval=FALSE}
-# remove this bit - the bit below does all we need it to do
-# getting the duplicates and removing those ratings from the ratings doc
-duplicate_movies <- movies %>%
-  get_dupes(title) %>%
-  distinct(title, .keep_all = TRUE) %>%
-  select(movieId)
-
-movies_without_dupes <- movies %>%
-  filter(! (movieId %in% duplicate_movies$movieId ) )
-
-ratings_without_dupes <- ratings %>%
-  filter(! (movieId %in% duplicate_movies$movieId ) )
-```
-
 
 
 ```{r}
@@ -92,8 +86,8 @@ movies[movies$title == repeatMovies[2],]
 rm(i, removeRows, repeatMovieIdLoc, repeatMovieLoc, repeatMovies, tempGenre)
 ```
 
-Next, we need to remove any user that has rated a single movie twice.
-We only keep the highest rating if they have rated a single movie twice. 
+Next, we need to remove any user that has rated a single movie twice. We only keep the highest rating if they have rated a single movie twice. This choice is made because rating the movie twice likely indicates that they liked the movie enough to watch it twice. We could have also taken the average or the latest rating, but made this choice in this context. 
+
 ```{r}
 ratings <- ratings[sample(1:nrow(ratings), 0.05*nrow(ratings)), ]
 
@@ -111,17 +105,7 @@ ratings <- ratings %>%
 
 ```
 
-Our dataset now consists of unique movies and unique ratings. 
-
-```{r}
-#SELECTING ONLY SMALL DATASET
-#movies <- movies[sample(1:nrow(movies), 0.05*nrow(movies)), ]
-#ratings <- ratings %>%
-#  filter(movieId %in% movies$movieId)
-
-#ratings <- ratings[sample(1:nrow(ratings), 0.05*nrow(ratings)), ]
-
-```
+Our dataset now consists of unique movies and unique ratings. It is ready for some exploratory analysis. 
 
 
 # Step 1: Exploratory Analysis
@@ -131,7 +115,7 @@ To investigate the distribution of the ratings of our dataset, we make 3 histogr
 
 The general histogram below shows that users are more likely to choose whole points for their ratings than half points, with 4 being the most common rating and 0.5 the least common. We see a left skewed distribution. In general, a relatively positive rating (3+) is much more common than a negative rating (less than 3). 
 
-```{r eval=FALSE}
+```{r}
 ggplot(data = ratings, mapping = aes(x=rating)) +
   geom_bar() +
   labs(
@@ -144,7 +128,7 @@ ggplot(data = ratings, mapping = aes(x=rating)) +
 
 Next we plot the average ratings of each movie. We see that most movies have an average rating of around 3, with very few movies having 1 or 5 as an average rating. 
 
-```{r eval=FALSE}
+```{r}
 ratings %>%
   group_by(movieId) %>%
   summarise(rating = mean(rating)) %>%
@@ -160,9 +144,10 @@ ggplot(aes(x=rating)) +
   theme_bw()
 ```
 
+Lastly we plot the average rating that each user gives. We see that there is a bit of a difference between the opinions of users on general. Since a rating system is not an objective measure, this could mean that there is a difference in interpretation of the metric. Some users could interpret 4 as 'alright' and some interpret a 4 as 'great!'. This difference can show itself in a different average rating. Therefore, we need to center and scale the data to be able to see the real opinion of each user on a specific movie. 
+We could be wrong, there could be users that only give a rating if a movie is very bad, which would affect their average rating as well. However, then the difference between the ratings of each movie is still the only relevant metric. All movies are bad does not help us identify the movies that the user liked. By taking the difference with the mean, we can still see which movies they liked more and which movies they liked less and thus give them the best possible recommendation we can. 
 
-
-```{r eval=FALSE}
+```{r}
 ratings %>%
   group_by(userId) %>%
   summarise(rating = mean(rating)) %>%
@@ -180,9 +165,11 @@ ggplot(aes(x=rating)) +
 
 # Step 2: Data Engineering
 
+In this section, we prepare the data for use in the recommendation systems. 
+
 ## Selecting popular movies
 
-We need to base our recommendations on data, so movies that have been rated by fewer than 20 users will not be included in our final database. We do not know enough about these movies. 
+We need to base our recommendations on data, so movies that have been rated by fewer than X users will not be included in our final database. We do not know enough about these movies. 
 
 ```{r eval=FALSE}
 m <- 20
@@ -194,7 +181,7 @@ movies_at_least_m <- ratings %>%
 
 ## Selecting popular users
 
-A similar reasoning counts for our users. We need to know what users like before we can recommend anything to them. Therefore, we will not use users who have rated fewer than 50 movies. 
+A similar reasoning counts for our users. We need to know what users like before we can recommend anything to them. Therefore, we will not use users who have rated fewer than X movies. 
 
 ```{r eval=FALSE}
 n <- 50
@@ -203,70 +190,25 @@ users_at_least_n <- movies_at_least_m %>%
   filter(n() >= n)
 ```
 
-We will not be using these created dataframes, since we want to be able to adjust the filtering to see how that affects the performance of our recommendation systems. 
+In further sections of this model, we do not use these exact objects since we want to identify the exact X that provides the best performance. 
 
 # Step 3: Model build
 
-We build three recommendations systems: item based, user based and model based. 
+We build three recommendations systems: item based, user based and model based and iterate over the different values for m and n that we have identified.
 
+## User-User model
+A model like this will assess similarity between users based on their ratings of movies. We will consider users who have high and low ratings for the same movies to be similar. When looking for a movie to recommend to a user, we look for the users that are their nearest neighbours. Then, we find the movie that most of these neighbours rated highly that our user has not watched yet. This is the movie or set of movies we then recommend. 
 
+## Item-Item based
+Item-item is very similar to the user-user, but more appropriate for a case where we have fewer items and many users. With item-item, we assess the similarity between items based on how many of the same users like this item. If a user then liked or used a specific item, we can find similar items and recommend those to the user. We can also further extend this model by considering baskets of items instead of individual items, so that we can recommend an item from a different basket.
 
-Turning the ratings into a matrix
-```{r}
-library(Matrix)
-
-movies <- unique(ratings$movieId)
-users <- unique(ratings$userId)
-
-ratings$col <- match(ratings$movieId, movies)
-ratings$row <- match(ratings$userId, users)
-
-df_sparse <- sparseMatrix(
-  i = ratings$row, 
-  j = ratings$col,
-  x = ratings$rating,
-  dimnames = list(users, movies),
-  repr = 'C'
-)
-
-dim(df_sparse)
-# [1] 145461   2933
-```
-
-```{r}
-# defining a function that removes the bottom users and movies
-selecting_fav_movies <- function(df, m, n) {
-  # number of nonzero per column
-  xx <- diff(df@p)
- # print(df@p)
-  
-  # number of nonzero per row
-  yy <- tabulate(df@i +1)
-  
-  # filtering for the bottom users and movies
-  df <- df[df[yy > m]]
-  df <- df[df[xx > n]]
-  
-  df
-}
-
-```
-
+## Model-based with Matrix Factorization
+Especially when we have very large amounts of data, it makes sense to use a matrix-factorization model. Matrix factorization takes users and items, and creates supergroups of both categories. These supergroups consist of similar users or items and allow us to compress our giant very sparse user-item-matrix into a smaller denser one. With a denser matrix, we are better able to make inferences based on the data because we simply have relatively more data available. 
 
 
 ```{r eval=FALSE}
-recommendation_model <- recommenderRegistry$get_entries(dataType = "realRatingMatrix")
-names(recommendation_model)
-
-lapply(recommendation_model, "[[", "description")
-
-recommendation_model$IBCF_realRatingMatrix$parameters
-```
-
-
-```{r }
-m <- c(10,20,50,100,200)
-n <- c(10,20,50,100,200)
+m <- c(10,20,50,100)
+n <- c(10,20,50,100)
 modelName <- c('IBCF', 'UBCF', 'LIBMF')
 search_grid <- expand_grid(m,n,modelName)
 
@@ -325,7 +267,7 @@ for (m_temp in m){
                             #  colCounts(df_sparse) > m_temp]
   
   if (modelName_temp == 'IBCF'){
-    parameters = list(k = 350)
+    parameters = list(k = 10)
   } else if (modelName_temp == 'UBCF'){
     parameters = list(nn=10)
   } else if (modelName_temp == 'LIBMF') {
@@ -358,10 +300,14 @@ for (m_temp in m){
   
 ```
 
-```{r}
-saveRDS(results, 'part1_results_object.rds')
+Because running the code above takes a long time, we have ran it once and saved our results in the object below. Instead of running it again, we simply load in the object for the knitting of this file. 
+
+```{r }
+#saveRDS(results, 'part1_results_object.rds')
+results <- readRDS('part1_results_object.rds')
 ```
 
+Below, we plot the results of our for loop in a few different ways. We set n and m to 50 and plot the other one in the next two plots.
 
 ```{r}
 # plotting the results in a nice graph
@@ -376,6 +322,7 @@ ggplot(aes(x = m, y = RMSE, color = modelName)) +
   )
 ```
 
+
 ```{r}
 # plotting the results in a nice graph
 results %>% 
@@ -389,7 +336,41 @@ ggplot(aes(x = n, y = RMSE, color = modelName)) +
   )
 ```
 
+In both plots, we clearly observe a performance difference between the three models. Clearly, the model based recommendation system with matrix factorization performs the best. In the graphs below, we can see that we have a very sparse matrix. Most users only watched very few movies and most movies were only watched by very few users. The matrix factorization model makes this matrix much more dense by defining supergroups of users and of items. This additional density means that we have more information on each supergroup and are better able to make inferences based on that information. Therefore, it is not surprising that this model performs the best in this extremely sparse case. 
+
+
 ```{r}
+ratings %>%
+  group_by(userId) %>%
+  summarise(n = n()) %>%
+ggplot(aes(x = n)) +
+  geom_histogram() + 
+  theme_bw() + 
+  labs(
+    title = 'Most users watched only a few movies',
+    x = 'Number of movies watched',
+    y = 'Number of users'
+  )
+```
+
+```{r}
+ratings %>%
+  group_by(movieId) %>%
+  summarise(n = n()) %>%
+ggplot(aes(x = n)) +
+  geom_histogram() + 
+  theme_bw() + 
+  labs(
+    title = 'Most movies were only watched a few times',
+    x = 'Number of times watched',
+    y = 'Number of movies'
+  )
+```
+
+In an alternative visualisation, we show the RMSE of each model as the intensity of the colour in the plot below. This way we can visualise all combinations in one plot, and identify which types of combinations are the most efficient. We see that all the model-based models perform better than all the other models, and specifically using n = 50 for that model performs better than any other value of n, for all values of m.
+
+```{r}
+library(viridisLite)
 library(viridis)
 # plotting the results in a nice graph
 results %>% 
@@ -413,6 +394,8 @@ The different models perform vastly differently on same data and the same combin
 In our case, the model based CF with matrix factorization performed better than the other item&user based models. The matrix factorization simplifies the users and movies we are using by aggregating similar ones into 'superusers' and 'supermovies'. These represent a group of similar entries. While user-item interactions are very sparse, the supergroups have a clearer idea of the interaction between groups and are able to smooth out rare events. Given the very sparse data we have, it is not very surprising that such an approach works best of all.
 Our best model has m = 50, n = 50 and uses the LIMBF model. 
 
+
+To not have to rerun everything from the beginning, we have saved and reloaded our data objects. This is not run for the knitting, as it is irrelevant. 
 
 ```{r eval=FALSE}
 saveRDS(training_data, file = "part1_training_data_object.rds")

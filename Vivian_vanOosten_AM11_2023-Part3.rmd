@@ -72,7 +72,7 @@ ratings <- ratings %>%
 
 
 
-To clean our dataset, we remove any duplicates we might have. 
+To clean our dataset, we remove any duplicates we might still have. 
 
 ```{r}
 repeatMovies <- names(which(table(movies$title) > 1))
@@ -152,7 +152,7 @@ df <- left_join(av_rating, genres_df, by = 'movieId') %>%
 
 # Training SVM model
 
-To start with, we want to predict whether a movie gets an excellent rating, which is defined as a rating above 3.75. Therefore, we create a binary variable y. This is the variable we will try to predict in our SVM. Before we can train our model on the data, we need to split it into a training and test set. 
+To start with, we are looking for a movie to watch tonight and we want to watch a movie with an excellent rating. Therefore, we will build a support-vector machine that will predict whether a movie gets a rating above 3.75. We create a binary variable y that shows this. This is the variable we will try to predict in our SVM. Before we can train our model on the data, we need to split it into a training and test set. 
 
 Before we do this, we see what the average rating distribution of our movies looks like. 
 
@@ -191,7 +191,7 @@ Next, we train our model on the trainingset. We have picked a radial kernel, and
 
 We have used the Kappa as the metric to optimize. This is because we have a very imbalanced dataset. Most movied do not have a rating above 3.75. When datasets are very imbalanced, the accuracy is no longer the best way to assess the performance of the model. To optimize accuracy, the model could simply predict only negatives and still perform relatively well. That is definitely not desired behaviour however, since we would then have no idea what to watch. The kappa measure ensures that we take into account more.
 
-To evaluate our model, we take specificity. This is the probability that it's a good movie if the model says it should be. This is because we do not want to waste our time watching bad movies, so we would rather it is actually a good movie. 
+To evaluate our model, we take precision. This is the probability that it's a good movie if the model says it should be. This is because we do not want to waste our time watching bad movies, so we would rather it is actually a good movie. We do not care as much that not all good movies are recognizeed because there aren't enough movies to watch anyway.
 
 
 ```{r}
@@ -253,9 +253,7 @@ confusionMatrix(data = test_validation, as.factor(test$y))
 
 ```
 
-With this information we can compare the two. Before we do that however, we need to decide what metric is most important to us, which depends on the use-case. For the purpose of this exercise we are going to be looking for a movie to watch and if we get a new movie, we want to predict which one is going to be good and therefore which one we should watch. We do not want to waste our time watching a bad movie and we do not really care that we will not watch all good movies, there are too many of those anyway. Therefore, the measure we care about is specificity. We see that the logarithmic model has a specificity of 0.37, while the SVM has a specificity of 0.47. This is quite an improvement and can justify us choosing the more complex SVM model over the logistic model.
-
-# NOTE TO SELF USE PRECISION INSTEAD OF SPECIFICITY
+With this information we can compare the two. Before we do that however, we need to decide what metric is most important to us, which depends on the use-case. For the purpose of this exercise we are going to be looking for a movie to watch and if we get a new movie, we want to predict which one is going to be good and therefore which one we should watch. We do not want to waste our time watching a bad movie and we do not really care that we will not watch all good movies, there are too many of those anyway. Therefore, the measure we care about is the 'Neg Pred Value' which is the precision. We see that the logarithmic model has a precision of 0.6436, while the SVM has a precision of 0.6694. This is not a very big improvement, so we would prefer to use the logarithmic model as it has much less complexity and will therefore translate better to data that the model hasn't seen before.
 
 Next, we set the threshold for a good movie at a rating of 4 instead of 3.75, using the same tuning parameters. 
 
@@ -290,7 +288,7 @@ confusionMatrix(data = test_validation, as.factor(test$y))
 
 ```
 
-We see that our accuracy has increased massively but our specificity has dropped to only 9%. We see that the dataset is even more imbalanced when we take a boundary of 4. This means that we have so few instances of a good movie that the algorithm cannot identify them anymore. If the algorithm says it's a good movie, there's now a 50/50 chance that it actually is a good movie and most good movies are not recognized. This was a lot better for the model with a threshold of 3.75. Therefore, we we should use a more balanced dataset and take 3.75.
+We see that our accuracy has increased massively but our specificity has dropped to only 50%. We see that the dataset is even more imbalanced when we take a boundary of 4. This means that we have so few instances of a good movie that the algorithm cannot identify them anymore. If the algorithm says it's a good movie, there's now a 50/50 chance that it actually is a good movie and most good movies are not even recognized. This was a lot better for the model with a threshold of 3.75. Therefore, we we should use a more balanced dataset and take 3.75 as the threshold for excellence.
 
 
 # Training an ANN model
@@ -313,18 +311,13 @@ test  <- testing(splitting)
 
 We have already preprocessed the data above. However, we do need to center and scale it for the ANN to handle it properly. We save the mean and standard deviation to be able to denormalise the outcome later.
 
-
 ```{r}
 # since we have previously preprocessed the data,
 # we only need to center and scale it before we can use it
 rec_obj <- recipe(av_rating ~ ., data = train) %>%
-  step_center(all_predictors(), all_outcomes()) %>%
-  step_scale(all_predictors(), all_outcomes()) %>%
+  step_center(all_predictors(), -all_outcomes()) %>%
+  step_scale(all_predictors(), -all_outcomes()) %>%
   prep(data = train)
-
-# in order to allow for denormalisations
-center_history <- rec_obj$steps[[1]]$means["av_rating"] # Keeping the mean
-scale_history  <- rec_obj$steps[[2]]$sds["av_rating"] #and the std 
 ```
 
 Next, we're creating the X and Y sets.
@@ -340,7 +333,7 @@ y_test_vec  <- test$av_rating
 ```
 
 
-The ANN we have chosen consists of three layers with 32 nodes each. We have set the dropout rate to 0.2 since intially we had a high level of overfitting where our trainingset had an R2 of 0.35 and the testset of 0.25. With a higher dropout rate the overfitting is less extreme. We have a mixture of linear and tan activation functions since our outcome needs to be continuous. The exact combination of nodes, activation functions and layers is based on trial and error. 
+The ANN we have chosen consists of three layers with 32 nodes each. We have set the dropout rate to 0.2 since intially we had a high level of overfitting where our trainingset had an R2 of 0.35 and the testset of 0.25. With a higher dropout rate the overfitting is much less present. We have a mixture of linear and tanh activation functions since our outcome needs to be continuous. The exact combination of nodes, activation functions and layers is based on trial and error. 
 
 
 ```{r}
@@ -429,33 +422,32 @@ plot(history)
 
 Next, we're evaluating the model:
 ```{r}
-scores = model_keras %>% evaluate(as.matrix(x_test_tbl), y_test_vec, verbose = 0)
-print(scores)
+
 
 print("training data")
 y_train_pred = model_keras %>% 
   predict(as.matrix(x_train_tbl)) %>%
   as.vector()
-# de-normalize to original scale
-y_train_pred <- (y_train_pred * scale_history + center_history) #denormalization
-y_train_vec <- (y_train_vec * scale_history + center_history) #denormalization
 
 R2 = R2(y_train_vec, y_train_pred)
 R2
+scores = model_keras %>% evaluate(as.matrix(x_train_tbl), y_train_vec, verbose = 0)
+print(scores)
 
 
 print("testing data")
 y_test_pred = model_keras %>% 
   predict(as.matrix(x_test_tbl)) %>% 
   as.vector()
-y_test_vec <- (y_test_vec * scale_history + center_history)
-y_test_pred <- (y_test_pred * scale_history + center_history)
 R2 = R2(y_test_vec,y_test_pred)
 R2
+
+scores = model_keras %>% evaluate(as.matrix(x_test_tbl), y_test_vec, verbose = 0)
+print(scores)
 ```
+We have an RMSE of 0.1, which is quite good considering that we have ratings between 0 and 5. Our R2 unfortunately is only 0.4 in both cases.
 
-
-To see how badly or well our model is performing, we compare it against a simple linear regression. 
+To see how badly or well our model is performing, we compare it against a simple linear regression on all variables.
 
 ```{r}
 lm_data <- bake(rec_obj, new_data = train)
@@ -469,23 +461,28 @@ control <- trainControl (
 linear_model <- train(
     av_rating ~.,
     data = lm_data,
-    method = "lm",
+    method = "glm",
     trControl = control
    )
+
 predicted <- predict(linear_model, lm_data_test)
 
 summary(linear_model)
 
 mse <- mean((lm_data_test$av_rating - predicted)^2)
+r2 <- R2(lm_data_test$av_rating, predicted)
 rmse <- sqrt(mse)
-mse
+rmse
+r2
 ```
 
-The R2 for our ANN is 0.36 and the R2 of a linear model is 0.29. This is a bit better, but the difference is not very big. Our ANN is relatively very complicated, with three layers and 32 nodes in each layer. The linear model, compared to this, only has one weight for each variable. Our ANN is a lot more complicated than a linear model, so we should take the linear model in this case to protect against overfitting and overcomplicating our model. 
+The R2 for our ANN is 0.37 and the R2 of a linear model is 0.34. The ANN is a bit better, but the difference is not very big. When we compare our RMSE however, we see that the ANN has an RMSE of 0.1 while the linear model has an RMSE of 0.3. This three-fold increase can mean the difference between a 3.7 and a 3.4 rating, which could be the difference between a good and a bad movie. Our ANN is relatively very complicated, with three layers and 32 nodes in each layer. The linear model, compared to this, only has one weight for each variable. Depending on the application that we are looking for, we could choose either model. In general, we would still choose the ANN because it the R2 and the RMSE of its testing data are very close to the those of the training data, indicating that we do not have an issue with overfitting. Therefore, we can safely use the more complex model to get the better result. 
 
 
 
-For writing the df object to a file, so we don't have to keep rerunning the same code over and over again. 
+
+We use the code below to write the df object to a file, so we don't have to keep rerunning the same code over and over again. 
+
 ```{r eval=FALSE}
 saveRDS(df, file = "part3_df_object.rds")
 ```
